@@ -34,8 +34,11 @@ class PdfBookView @JvmOverloads constructor(
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val holders = mutableMapOf<Int, PageHolder>()
     private val renderJobs = mutableMapOf<Int, Job>()
+    private val renderJobTargets = mutableMapOf<Int, Pair<Int, Int>>()
+    private val renderJobTokens = mutableMapOf<Int, Int>()
     private val bitmapPool = mutableListOf<Bitmap>()
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var nextRenderToken = 1
     private var scroller = OverScroller(context)
     private var offsetX = 0f
     private var vw = 0; private var vh = 0
@@ -182,6 +185,8 @@ class PdfBookView @JvmOverloads constructor(
     private fun cancelRenderJobs() {
         renderJobs.values.forEach { it.cancel() }
         renderJobs.clear()
+        renderJobTargets.clear()
+        renderJobTokens.clear()
     }
 
     private fun getReusableBitmap(w: Int, h: Int): Bitmap? {
@@ -201,22 +206,10 @@ class PdfBookView @JvmOverloads constructor(
     private fun drawPage(canvas: Canvas, page: Int, x: Int, y: Int, w: Int, h: Int) {
         val holder = holders.getOrPut(page) { PageHolder(w, h) }
         if (holder.w != w || holder.h != h) {
-            if (!pinchInProgress) {
-                recycleBitmap(holder.bitmap)
-                holder.bitmap = null
-                holder.needsRerender = false
-            } else if (holder.bitmap != null) {
-                // Keep old bitmap as a temporary preview during pinch,
-                // then force a proper rerender when pinch ends.
+            if (holder.bitmap != null || !pinchInProgress) {
                 holder.needsRerender = true
             }
             holder.w = w; holder.h = h
-        }
-
-        if (!pinchInProgress && holder.needsRerender) {
-            recycleBitmap(holder.bitmap)
-            holder.bitmap = null
-            holder.needsRerender = false
         }
 
         paint.color = pageBackgroundColor
@@ -226,32 +219,54 @@ class PdfBookView @JvmOverloads constructor(
             canvas.withSave { clipRect(x, y, x + w, y + h); drawBitmap(bmp, Rect(0, 0, bmp.width, bmp.height), Rect(x, y, x + w, y + h), paint) }
         } else {
             paint.color = loadingPlaceholderColor; canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
-            if (!pinchInProgress) {
-                requestRender(page, w, h)
-            }
+        }
+
+        if (!pinchInProgress && (holder.needsRerender || bmp == null)) {
+            requestRender(page, w, h)
         }
     }
 
     private fun requestRender(page: Int, w: Int, h: Int) {
-        if (page < 0 || page >= pageCount || renderJobs.containsKey(page)) return
+        if (page < 0 || page >= pageCount) return
+
+        val runningJob = renderJobs[page]
+        val runningTarget = renderJobTargets[page]
+        if (runningJob != null) {
+            if (runningTarget != null && runningTarget.first == w && runningTarget.second == h) return
+            runningJob.cancel()
+            renderJobs.remove(page)
+            renderJobTargets.remove(page)
+            renderJobTokens.remove(page)
+        }
+
+        val token = nextRenderToken++
+        renderJobTargets[page] = w to h
+        renderJobTokens[page] = token
         val reused = getReusableBitmap(w, h)
-        renderJobs[page] = scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val bmp = renderPage?.invoke(page, w, h, 0f, reused)
                 if (bmp != null && !bmp.isRecycled) {
                     val hld = holders[page]
-                    if (hld != null && hld.w == w && hld.h == h) {
-                        recycleBitmap(hld.bitmap)
+                    if (hld != null && hld.w == w && hld.h == h && renderJobTokens[page] == token) {
+                        val oldBitmap = hld.bitmap
                         hld.bitmap = bmp
                         hld.needsRerender = false
+                        recycleBitmap(oldBitmap)
                     }
                     else recycleBitmap(bmp)
                 }
             } finally { 
-                renderJobs.remove(page)
+                if (renderJobTokens[page] == token) {
+                    renderJobs.remove(page)
+                    renderJobTargets.remove(page)
+                    renderJobTokens.remove(page)
+                }
                 invalidate() 
             }
         }
+        renderJobs[page] = job
+        job.start()
     }
 
     private fun prefetch(center: Int) {
@@ -291,6 +306,8 @@ class PdfBookView @JvmOverloads constructor(
         }
         renderJobs.keys.filter { it < lo || it > hi }.forEach { key ->
             renderJobs.remove(key)?.cancel()
+            renderJobTargets.remove(key)
+            renderJobTokens.remove(key)
         }
     }
 
@@ -301,6 +318,8 @@ class PdfBookView @JvmOverloads constructor(
         bitmapPool.clear()
         renderJobs.values.forEach { it.cancel() }
         renderJobs.clear()
+        renderJobTargets.clear()
+        renderJobTokens.clear()
     }
 
     private fun animateTo(page: Int) {
