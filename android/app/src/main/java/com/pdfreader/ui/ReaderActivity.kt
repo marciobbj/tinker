@@ -28,6 +28,7 @@ class ReaderActivity : AppCompatActivity() {
     private lateinit var topBar: View
     private lateinit var bottomBar: View
     private lateinit var pageIndicator: TextView
+    private lateinit var btnBack: ImageButton
     private lateinit var btnPrev: ImageButton
     private lateinit var btnNext: ImageButton
     private lateinit var btnGoTo: ImageButton
@@ -56,6 +57,7 @@ class ReaderActivity : AppCompatActivity() {
         topBar = findViewById(R.id.topBar)
         bottomBar = findViewById(R.id.bottomBar)
         pageIndicator = findViewById(R.id.pageIndicator)
+        btnBack = findViewById(R.id.btnBack)
         btnPrev = findViewById(R.id.btnPrev)
         btnNext = findViewById(R.id.btnNext)
         btnGoTo = findViewById(R.id.btnGoTo)
@@ -212,6 +214,10 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun setupControls() {
+        btnBack.setOnClickListener {
+            onBackPressedDispatcher.onBackPressed()
+        }
+
         btnPrev.setOnClickListener {
             if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
                 bookView?.goToPage((bookView?.currentPage ?: 0) - 1)

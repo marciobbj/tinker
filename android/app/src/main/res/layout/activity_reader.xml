@@ -28,8 +28,7 @@
             android:layout_height="40dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:src="@drawable/ic_back"
-            android:contentDescription="@string/back"
-            android:onClick="finish" />
+            android:contentDescription="@string/back" />
 
         <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
 
