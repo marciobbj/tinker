@@ -1,6 +1,7 @@
 package com.pdfreader.ui
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -37,6 +38,16 @@ class PdfBookView @JvmOverloads constructor(
     private var offsetX = 0f
     private var vw = 0; private var vh = 0
     private var animating = false
+    private val pageCacheRadius = 2
+
+    private val isDarkTheme: Boolean
+        get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+    private val pageBackgroundColor: Int
+        get() = if (isDarkTheme) Color.rgb(20, 20, 20) else Color.WHITE
+
+    private val loadingPlaceholderColor: Int
+        get() = if (isDarkTheme) Color.rgb(34, 34, 34) else Color.LTGRAY
 
     private val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean { scroller.forceFinished(true); animating = false; return true }
@@ -54,7 +65,7 @@ class PdfBookView @JvmOverloads constructor(
         }
     })
 
-    init { setBackgroundColor(Color.BLACK) }
+    init { setBackgroundColor(pageBackgroundColor) }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh); vw = w; vh = h; offsetX = 0f; recycleAll()
@@ -80,7 +91,7 @@ class PdfBookView @JvmOverloads constructor(
 
     private fun recycleBitmap(bmp: Bitmap?) {
         if (bmp == null || bmp.isRecycled) return
-        if (bitmapPool.size < 3) {
+        if (bitmapPool.size < 5) {
             bitmapPool.add(bmp)
         } else {
             bmp.recycle()
@@ -93,13 +104,13 @@ class PdfBookView @JvmOverloads constructor(
             recycleBitmap(holder.bitmap); holder.bitmap = null
             holder.w = w; holder.h = h
         }
-        paint.color = Color.WHITE
+        paint.color = pageBackgroundColor
         canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
         val bmp = holder.bitmap?.takeUnless { it.isRecycled }
         if (bmp != null) {
             canvas.withSave { clipRect(x, y, x + w, y + h); drawBitmap(bmp, Rect(0, 0, bmp.width, bmp.height), Rect(x, y, x + w, y + h), paint) }
         } else {
-            paint.color = Color.LTGRAY; canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
+            paint.color = loadingPlaceholderColor; canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
             requestRender(page, w, h)
         }
     }
@@ -112,7 +123,7 @@ class PdfBookView @JvmOverloads constructor(
                 val size = getPageSize?.invoke(page)
                 val zoom = if (size != null && size.first > 0 && size.second > 0) {
                     minOf(w.toFloat() / size.first, h.toFloat() / size.second)
-                } else 1.0f
+                } else 0f
                 val bmp = renderPage?.invoke(page, w, h, zoom, reused)
                 if (bmp != null && !bmp.isRecycled) {
                     val hld = holders[page]
@@ -131,13 +142,18 @@ class PdfBookView @JvmOverloads constructor(
     private fun prefetch(center: Int) {
         if (vw <= 0 || vh <= 0) return
         requestRender(center, vw, vh)
-        if (center > 0) requestRender(center - 1, vw, vh)
-        if (center < pageCount - 1) requestRender(center + 1, vw, vh)
+        for (d in 1..pageCacheRadius) {
+            val prev = center - d
+            val next = center + d
+            if (prev >= 0) requestRender(prev, vw, vh)
+            if (next < pageCount) requestRender(next, vw, vh)
+        }
         evict()
     }
 
     private fun evict() {
-        val lo = (currentPage - 1).coerceAtLeast(0); val hi = (currentPage + 1).coerceAtMost(pageCount - 1)
+        val lo = (currentPage - pageCacheRadius).coerceAtLeast(0)
+        val hi = (currentPage + pageCacheRadius).coerceAtMost(pageCount - 1)
         holders.keys.filter { it < lo || it > hi }.forEach { key ->
             recycleBitmap(holders.remove(key)?.bitmap)
         }

@@ -1,6 +1,7 @@
 package com.pdfreader.ui
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -45,6 +46,15 @@ class PdfVerticalView @JvmOverloads constructor(
     private var lastEvictFirst = -1
     private var lastEvictLast = -1
 
+    private val isDarkTheme: Boolean
+        get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+    private val pageBackgroundColor: Int
+        get() = if (isDarkTheme) Color.rgb(20, 20, 20) else Color.WHITE
+
+    private val loadingPlaceholderColor: Int
+        get() = if (isDarkTheme) Color.rgb(34, 34, 34) else Color.LTGRAY
+
     private val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent) = true
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
@@ -58,7 +68,7 @@ class PdfVerticalView @JvmOverloads constructor(
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean { listener?.onPageTap(); return true }
     })
 
-    init { setWillNotDraw(false); setBackgroundColor(Color.BLACK) }
+    init { setWillNotDraw(false); setBackgroundColor(pageBackgroundColor) }
 
     override fun onMeasure(wSpec: Int, hSpec: Int) =
         setMeasuredDimension(MeasureSpec.getSize(wSpec), MeasureSpec.getSize(hSpec))
@@ -140,7 +150,7 @@ class PdfVerticalView @JvmOverloads constructor(
             recycleBitmap(holder.bitmap); holder.bitmap = null
             holder.w = w; holder.h = h
         }
-        paint.color = Color.WHITE
+        paint.color = pageBackgroundColor
         canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
 
         val bmp = holder.bitmap?.takeUnless { it.isRecycled }
@@ -150,7 +160,7 @@ class PdfVerticalView @JvmOverloads constructor(
                 drawBitmap(bmp, Rect(0, 0, bmp.width, bmp.height), Rect(x, y, x + w, y + h), paint)
             }
         } else {
-            paint.color = Color.LTGRAY
+            paint.color = loadingPlaceholderColor
             canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
             requestRender(page, w, h)
         }
@@ -161,7 +171,7 @@ class PdfVerticalView @JvmOverloads constructor(
         val reused = getReusableBitmap(w, h)
         renderJobs[page] = scope.launch {
             try {
-                val zoom = if (maxPageWidth > 0) width.toFloat() / maxPageWidth else 1.0f
+                val zoom = if (maxPageWidth > 0) width.toFloat() / maxPageWidth else 0f
                 val bmp = renderPage?.invoke(page, w, h, zoom, reused)
                 if (bmp != null && !bmp.isRecycled) {
                     val hld = holders[page]
