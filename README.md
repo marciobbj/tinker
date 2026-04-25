@@ -1,62 +1,66 @@
-# PDF Reader para Android
+<p align="center">
+	<img src="assets/tinker-logo.svg" alt="Tinker" width="132" />
+</p>
 
-Leitor de PDF minimalista para Android com core em C++ (MuPDF).
+# Tinker
 
-## Recursos
+Tinker is a minimalist PDF reader for Android with a C++ core.
 
-- **Core C++ com MuPDF**: renderização rápida via NDK
-- **Modo Vertical**: scroll contínuo vertical entre páginas
-- **Modo Livro**: paginação horizontal com swipe e tap zones
-- **Bookmarks**: salva página, modo e timestamp automaticamente
-- **Dark Mode**: inverte cores do PDF para leitura noturna
-- **Minimalista**: UI clean, sem distrações
+## Features
+
+- **C++ core with MuPDF**: fast rendering via the NDK
+- **Vertical mode**: continuous vertical scrolling between pages
+- **Book mode**: horizontal paging with swipe and tap zones
+- **Bookmarks**: automatically saves page, mode, and timestamp
+- **Dark mode**: inverts PDF colors for night reading
+- **Minimalist**: clean UI with no distractions
 
 ## Como compilar
 
-### 1. Obter MuPDF
+### 1. Get MuPDF
 
-Baixe o MuPDF e compile para Android, ou use prebuilt:
+Clone MuPDF and build it for Android, or use a prebuilt copy:
 
 ```bash
 git clone --recursive https://github.com/ArtifexSoftware/mupdf.git
-# Siga as instruções de build do MuPDF para Android
-# Coloque os headers em mupdf/include e libs em mupdf/libs/<abi>
+# Follow the MuPDF Android build instructions
+# Place the headers in mupdf/include and the libs in mupdf/libs/<abi>
 ```
 
-### 2. Compilar o app
+### 2. Build the app
 
 ```bash
 cd android
 ./gradlew assembleDebug
 ```
 
-## Como portar o core
+## Porting the core
 
-O core em `core/` é independente do Android. Para portar para outra plataforma:
+The core in `core/` is independent from Android. To port it to another platform:
 
-1. Compile `core/src/pdf_engine.cpp` com MuPDF
-2. Implemente bindings para sua plataforma (JavaScript, Python, etc.)
-3. Use a API `PdfEngine` em C++
+1. Compile `core/src/pdf_engine.cpp` with MuPDF
+2. Implement bindings for your target platform (JavaScript, Python, etc.)
+3. Use the `PdfEngine` C++ API
 
-## Estrutura do C++
+## C++ structure
 
-- `pdfcore::PdfEngine`: abre, renderiza e extrai texto de PDFs
-- `pdfcore::RenderedPage`: bitmap em memória (RGBA)
-- `pdfcore::PageInfo`: dimensões da página
-- `setDarkMode(bool)`: aplica inversão de cores nos pixels
+- `pdfcore::PdfEngine`: opens, renders, and extracts text from PDFs
+- `pdfcore::RenderedPage`: in-memory bitmap (RGBA)
+- `pdfcore::PageInfo`: page dimensions
+- `setDarkMode(bool)`: applies color inversion to pixels
 
 ## JNI Bridge
 
-`native-lib.cpp` expõe métodos estáticos para `PdfNative.kt`:
-- Cria/destroi engine
-- Abre/fecha documento
-- Renderiza página para `android.graphics.Bitmap`
-- Retorna contagem de páginas e título
+`native-lib.cpp` exposes static methods for `PdfNative.kt`:
+- Create/destroy engine
+- Open/close document
+- Render a page into `android.graphics.Bitmap`
+- Return page count and title
 
-## Próximos passos sugeridos
+## Suggested next steps
 
-- [ ] Adicionar zoom pinch-to-zoom
-- [ ] Busca de texto com highlight
-- [ ] Índice/navegação por outline
-- [ ] Cache de bitmaps em disco (LRU)
-- [ ] Suporte a anotações
+- [ ] Add pinch-to-zoom
+- [ ] Text search with highlight
+- [ ] Outline/index navigation
+- [ ] On-disk bitmap cache (LRU)
+- [ ] Annotation support
