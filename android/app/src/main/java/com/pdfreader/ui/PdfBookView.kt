@@ -40,7 +40,8 @@ class PdfBookView @JvmOverloads constructor(
     private var offsetX = 0f
     private var vw = 0; private var vh = 0
     private var animating = false
-    private val pageCacheRadius = 2
+    private val forwardCacheRadius = 2
+    private val backwardCacheRadius = 1
     private val minZoom = 1.0f
     private val maxZoom = 2.0f
     private var zoomFactor = 1.0f
@@ -203,9 +204,21 @@ class PdfBookView @JvmOverloads constructor(
             if (!pinchInProgress) {
                 recycleBitmap(holder.bitmap)
                 holder.bitmap = null
+                holder.needsRerender = false
+            } else if (holder.bitmap != null) {
+                // Keep old bitmap as a temporary preview during pinch,
+                // then force a proper rerender when pinch ends.
+                holder.needsRerender = true
             }
             holder.w = w; holder.h = h
         }
+
+        if (!pinchInProgress && holder.needsRerender) {
+            recycleBitmap(holder.bitmap)
+            holder.bitmap = null
+            holder.needsRerender = false
+        }
+
         paint.color = pageBackgroundColor
         canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
         val bmp = holder.bitmap?.takeUnless { it.isRecycled }
@@ -228,7 +241,9 @@ class PdfBookView @JvmOverloads constructor(
                 if (bmp != null && !bmp.isRecycled) {
                     val hld = holders[page]
                     if (hld != null && hld.w == w && hld.h == h) {
-                        recycleBitmap(hld.bitmap); hld.bitmap = bmp
+                        recycleBitmap(hld.bitmap)
+                        hld.bitmap = bmp
+                        hld.needsRerender = false
                     }
                     else recycleBitmap(bmp)
                 }
@@ -245,20 +260,32 @@ class PdfBookView @JvmOverloads constructor(
         val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
         requestRender(center, renderW, renderH)
 
-        val radius = if (isZoomed()) 0 else pageCacheRadius
-        for (d in 1..radius) {
-            val prev = center - d
-            val next = center + d
-            if (prev >= 0) requestRender(prev, renderW, renderH)
-            if (next < pageCount) requestRender(next, renderW, renderH)
+        if (!isZoomed()) {
+            // Prioritize forward reading so the next page is usually ready before swipe ends.
+            for (d in 1..forwardCacheRadius) {
+                val next = center + d
+                if (next < pageCount) requestRender(next, renderW, renderH)
+            }
+
+            // Keep one page behind for quick back navigation.
+            for (d in 1..backwardCacheRadius) {
+                val prev = center - d
+                if (prev >= 0) requestRender(prev, renderW, renderH)
+            }
         }
         evict()
     }
 
     private fun evict() {
-        val radius = if (isZoomed()) 0 else pageCacheRadius
-        val lo = (currentPage - radius).coerceAtLeast(0)
-        val hi = (currentPage + radius).coerceAtMost(pageCount - 1)
+        val lo: Int
+        val hi: Int
+        if (isZoomed()) {
+            lo = currentPage
+            hi = currentPage
+        } else {
+            lo = (currentPage - backwardCacheRadius).coerceAtLeast(0)
+            hi = (currentPage + forwardCacheRadius).coerceAtMost(pageCount - 1)
+        }
         holders.keys.filter { it < lo || it > hi }.forEach { key ->
             recycleBitmap(holders.remove(key)?.bitmap)
         }
@@ -323,5 +350,8 @@ class PdfBookView @JvmOverloads constructor(
     }
     fun cleanup() { scope.cancel(); recycleAll() }
 
-    private class PageHolder(var w: Int, var h: Int) { var bitmap: Bitmap? = null }
+    private class PageHolder(var w: Int, var h: Int) {
+        var bitmap: Bitmap? = null
+        var needsRerender: Boolean = false
+    }
 }

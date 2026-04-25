@@ -250,9 +250,20 @@ class PdfVerticalView @JvmOverloads constructor(
             if (!pinchInProgress) {
                 recycleBitmap(holder.bitmap)
                 holder.bitmap = null
+                holder.needsRerender = false
+            } else if (holder.bitmap != null) {
+                // Keep temporary preview during pinch and rerender after gesture ends.
+                holder.needsRerender = true
             }
             holder.w = w; holder.h = h
         }
+
+        if (!pinchInProgress && holder.needsRerender) {
+            recycleBitmap(holder.bitmap)
+            holder.bitmap = null
+            holder.needsRerender = false
+        }
+
         paint.color = pageBackgroundColor
         canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
 
@@ -282,6 +293,7 @@ class PdfVerticalView @JvmOverloads constructor(
                     if (hld != null && hld.w == w && hld.h == h) {
                         recycleBitmap(hld.bitmap)
                         hld.bitmap = bmp
+                        hld.needsRerender = false
                     } else {
                         recycleBitmap(bmp)
                     }
@@ -349,5 +361,8 @@ class PdfVerticalView @JvmOverloads constructor(
 
     fun cleanup() { scope.cancel(); recycleAll() }
 
-    private class PageHolder(var w: Int, var h: Int) { var bitmap: Bitmap? = null }
+    private class PageHolder(var w: Int, var h: Int) {
+        var bitmap: Bitmap? = null
+        var needsRerender: Boolean = false
+    }
 }
