@@ -10,10 +10,12 @@ import android.graphics.Rect
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.ViewGroup
 import android.widget.OverScroller
 import androidx.core.graphics.withSave
 import kotlinx.coroutines.*
+import kotlin.math.roundToInt
 
 class PdfVerticalView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
@@ -40,7 +42,13 @@ class PdfVerticalView @JvmOverloads constructor(
     private val gap = 16
     private val pageBuffer = 1
     private var pageOffsets = IntArray(0)
+    private var pageWidths = IntArray(0)
     private var pageHeights = IntArray(0)
+    private var contentMaxWidth = 0
+    private val minZoom = 1.0f
+    private val maxZoom = 4.0f
+    private var zoomFactor = 1.0f
+    private var panX = 0f
 
     // Track last visible range to avoid evicting every frame
     private var lastEvictFirst = -1
@@ -55,10 +63,69 @@ class PdfVerticalView @JvmOverloads constructor(
     private val loadingPlaceholderColor: Int
         get() = if (isDarkTheme) Color.rgb(34, 34, 34) else Color.LTGRAY
 
+    private fun isZoomed(): Boolean = zoomFactor > 1.01f
+
+    private fun clampPanX() {
+        val vw = width
+        if (vw <= 0) {
+            panX = 0f
+            return
+        }
+        val maxPan = ((contentMaxWidth - vw) / 2f).coerceAtLeast(0f)
+        panX = panX.coerceIn(-maxPan, maxPan)
+    }
+
+    private fun cancelRenderJobs() {
+        renderJobs.values.forEach { it.cancel() }
+        renderJobs.clear()
+    }
+
+    private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            if (width <= 0 || height <= 0 || pageCount <= 0) return false
+
+            val oldZoom = zoomFactor
+            val newZoom = (oldZoom * detector.scaleFactor).coerceIn(minZoom, maxZoom)
+            if (kotlin.math.abs(newZoom - oldZoom) < 0.001f) return false
+
+            val oldOffsets = pageOffsets
+            val oldHeights = pageHeights
+            val anchor = getCurrentPage().coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+            val oldTop = if (anchor < oldOffsets.size) oldOffsets[anchor] else scrollY
+            val oldHeight = if (anchor < oldHeights.size) oldHeights[anchor].coerceAtLeast(1) else 1
+            val ratioWithinPage = (scrollY - oldTop).toFloat() / oldHeight.toFloat()
+
+            zoomFactor = newZoom
+            if (!isZoomed()) {
+                zoomFactor = 1.0f
+                panX = 0f
+            }
+
+            cancelRenderJobs()
+            rebuildLayout(width, height)
+
+            if (pageOffsets.isNotEmpty()) {
+                val idx = anchor.coerceIn(0, pageOffsets.size - 1)
+                val newTop = pageOffsets[idx]
+                val newHeight = pageHeights[idx].coerceAtLeast(1)
+                val newY = (newTop + ratioWithinPage * newHeight).roundToInt()
+                scrollTo(0, newY)
+            }
+
+            clampPanX()
+            invalidate()
+            return true
+        }
+    })
+
     private val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent) = true
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
             parent.requestDisallowInterceptTouchEvent(true)
+            if (isZoomed()) {
+                panX -= dx
+                clampPanX()
+            }
             scrollBy(0, dy.toInt()); return true
         }
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
@@ -80,16 +147,37 @@ class PdfVerticalView @JvmOverloads constructor(
     }
 
     private fun rebuildLayout(viewW: Int, viewH: Int = height) {
-        if (viewW <= 0 || pageCount <= 0) { pageOffsets = IntArray(0); pageHeights = IntArray(0); maxScrollY = 0; return }
-        pageOffsets = IntArray(pageCount); pageHeights = IntArray(pageCount)
+        if (viewW <= 0 || pageCount <= 0) {
+            pageOffsets = IntArray(0)
+            pageWidths = IntArray(0)
+            pageHeights = IntArray(0)
+            contentMaxWidth = 0
+            maxScrollY = 0
+            return
+        }
+        pageOffsets = IntArray(pageCount)
+        pageWidths = IntArray(pageCount)
+        pageHeights = IntArray(pageCount)
         var y = 0
-        val zoom = if (maxPageWidth > 0) viewW.toFloat() / maxPageWidth else 1.0f
+        val fitZoom = if (maxPageWidth > 0) viewW.toFloat() / maxPageWidth else 1.0f
+        val zoom = fitZoom * zoomFactor
+        var widest = 0
         for (i in 0 until pageCount) {
             pageOffsets[i] = y
             val size = getPageSize?.invoke(i)
+            val pw = if (size != null) {
+                (size.first * zoom).toInt().coerceAtLeast(1)
+            } else {
+                (viewW * zoomFactor).roundToInt().coerceAtLeast(1)
+            }
             val ph = if (size != null) (size.second * zoom).toInt().coerceAtLeast(1) else viewH.coerceAtLeast(1)
-            pageHeights[i] = ph; y += ph + gap
+            pageWidths[i] = pw
+            pageHeights[i] = ph
+            widest = maxOf(widest, pw)
+            y += ph + gap
         }
+        contentMaxWidth = widest
+        clampPanX()
         maxScrollY = (y - viewH).coerceAtLeast(0)
     }
 
@@ -97,7 +185,7 @@ class PdfVerticalView @JvmOverloads constructor(
         super.onDraw(canvas)
         if (width <= 0 || height <= 0 || pageOffsets.isEmpty()) return
         val vw = width; val vh = height; val sy = scrollY
-        val zoom = if (maxPageWidth > 0) vw.toFloat() / maxPageWidth else 1.0f
+        val zoom = (if (maxPageWidth > 0) vw.toFloat() / maxPageWidth else 1.0f) * zoomFactor
         var firstVis = -1; var lastVis = -1
         val start = findFirst(sy)
         for (i in start until pageCount) {
@@ -107,8 +195,8 @@ class PdfVerticalView @JvmOverloads constructor(
             if (pageTop + ph >= sy) {
                 if (firstVis < 0) firstVis = i; lastVis = i
                 val size = getPageSize?.invoke(i)
-                val pw = if (size != null) (size.first * zoom).toInt().coerceAtLeast(1) else vw
-                val px = (vw - pw) / 2
+                val pw = if (size != null) (size.first * zoom).toInt().coerceAtLeast(1) else pageWidths.getOrNull(i)?.coerceAtLeast(1) ?: vw
+                val px = ((vw - pw) / 2f + panX).roundToInt()
                 drawPage(canvas, i, px, pageTop, pw, ph)
             }
         }
@@ -171,8 +259,7 @@ class PdfVerticalView @JvmOverloads constructor(
         val reused = getReusableBitmap(w, h)
         renderJobs[page] = scope.launch {
             try {
-                val zoom = if (maxPageWidth > 0) width.toFloat() / maxPageWidth else 0f
-                val bmp = renderPage?.invoke(page, w, h, zoom, reused)
+                val bmp = renderPage?.invoke(page, w, h, 0f, reused)
                 if (bmp != null && !bmp.isRecycled) {
                     val hld = holders[page]
                     if (hld != null && hld.w == w && hld.h == h) {
@@ -227,7 +314,9 @@ class PdfVerticalView @JvmOverloads constructor(
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.action == MotionEvent.ACTION_DOWN) scroller.forceFinished(true)
-        return detector.onTouchEvent(e) || super.onTouchEvent(e)
+        val scaleHandled = scaleDetector.onTouchEvent(e)
+        val gestureHandled = if (!scaleDetector.isInProgress) detector.onTouchEvent(e) else true
+        return scaleHandled || gestureHandled || super.onTouchEvent(e)
     }
 
     override fun scrollTo(x: Int, y: Int) { super.scrollTo(x, y.coerceIn(0, maxScrollY)); invalidate() }

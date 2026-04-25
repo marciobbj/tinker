@@ -3,7 +3,9 @@ package com.pdfreader.ui
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.InputType
 import android.view.View
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.TextView
@@ -28,6 +30,7 @@ class ReaderActivity : AppCompatActivity() {
     private lateinit var pageIndicator: TextView
     private lateinit var btnPrev: ImageButton
     private lateinit var btnNext: ImageButton
+    private lateinit var btnGoTo: ImageButton
     private lateinit var btnMode: ImageButton
     private lateinit var btnDark: ImageButton
     private lateinit var btnBookmark: ImageButton
@@ -55,6 +58,7 @@ class ReaderActivity : AppCompatActivity() {
         pageIndicator = findViewById(R.id.pageIndicator)
         btnPrev = findViewById(R.id.btnPrev)
         btnNext = findViewById(R.id.btnNext)
+        btnGoTo = findViewById(R.id.btnGoTo)
         btnMode = findViewById(R.id.btnMode)
         btnDark = findViewById(R.id.btnDark)
         btnBookmark = findViewById(R.id.btnBookmark)
@@ -227,6 +231,11 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
 
+        btnGoTo.setOnClickListener {
+            if (!documentReady) return@setOnClickListener
+            showGoToPageDialog()
+        }
+
         btnMode.setOnClickListener {
             val currentPage = getCurrentReaderPage()
             val newMode = if (currentMode == SettingsStore.DISPLAY_MODE_VERTICAL)
@@ -258,6 +267,47 @@ class ReaderActivity : AppCompatActivity() {
                 .setPositiveButton("OK", null)
                 .show()
         }
+    }
+
+    private fun showGoToPageDialog() {
+        val pageCount = pdfDocument?.pageCount ?: return
+        if (pageCount <= 0) return
+
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            val current = (getCurrentReaderPage() + 1).toString()
+            setText(current)
+            setSelection(current.length)
+            hint = getString(R.string.go_to_page_hint, pageCount)
+        }
+
+        val horizontal = (resources.displayMetrics.density * 24).toInt()
+        val vertical = (resources.displayMetrics.density * 12).toInt()
+        input.setPadding(horizontal, vertical, horizontal, vertical)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.go_to_page_title)
+            .setView(input)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.go_to_page_confirm, null)
+            .create()
+
+        dialog.setOnShowListener {
+            val positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            positive.setOnClickListener {
+                val targetOneBased = input.text?.toString()?.trim()?.toIntOrNull()
+                if (targetOneBased == null || targetOneBased < 1 || targetOneBased > pageCount) {
+                    input.error = getString(R.string.go_to_page_invalid)
+                    return@setOnClickListener
+                }
+                val targetPage = targetOneBased - 1
+                applyPageToCurrentView(targetPage)
+                saveBookmark(targetPage)
+                dialog.dismiss()
+            }
+        }
+
+        dialog.show()
     }
 
     private fun toggleUi() {

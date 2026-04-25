@@ -8,4 +8,9 @@
     <string name="previous">Página anterior</string>
     <string name="next">Próxima página</string>
     <string name="switch_mode">Alternar modo de leitura</string>
+    <string name="go_to_page">Ir para página</string>
+    <string name="go_to_page_title">Ir para página</string>
+    <string name="go_to_page_hint">Digite um número entre 1 e %1$d</string>
+    <string name="go_to_page_confirm">Ir</string>
+    <string name="go_to_page_invalid">Número de página inválido</string>
 </resources>

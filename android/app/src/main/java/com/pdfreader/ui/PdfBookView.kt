@@ -10,10 +10,12 @@ import android.graphics.Rect
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.OverScroller
 import androidx.core.graphics.withSave
 import kotlinx.coroutines.*
+import kotlin.math.roundToInt
 
 class PdfBookView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
@@ -39,6 +41,12 @@ class PdfBookView @JvmOverloads constructor(
     private var vw = 0; private var vh = 0
     private var animating = false
     private val pageCacheRadius = 2
+    private val minZoom = 1.0f
+    private val maxZoom = 4.0f
+    private var zoomFactor = 1.0f
+    private var panX = 0f
+    private var panY = 0f
+    private var pinchInProgress = false
 
     private val isDarkTheme: Boolean
         get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -49,16 +57,70 @@ class PdfBookView @JvmOverloads constructor(
     private val loadingPlaceholderColor: Int
         get() = if (isDarkTheme) Color.rgb(34, 34, 34) else Color.LTGRAY
 
+    private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+            pinchInProgress = true
+            scroller.forceFinished(true)
+            animating = false
+            return true
+        }
+
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            if (vw <= 0 || vh <= 0) return false
+            val oldZoom = zoomFactor
+            val newZoom = (oldZoom * detector.scaleFactor).coerceIn(minZoom, maxZoom)
+            if (kotlin.math.abs(newZoom - oldZoom) < 0.001f) return false
+
+            val fx = detector.focusX - vw / 2f
+            val fy = detector.focusY - vh / 2f
+            val ratio = newZoom / oldZoom
+
+            zoomFactor = newZoom
+            panX = (panX + fx) * ratio - fx
+            panY = (panY + fy) * ratio - fy
+
+            if (!isZoomed()) {
+                zoomFactor = 1.0f
+                panX = 0f
+                panY = 0f
+            }
+
+            cancelRenderJobs()
+            clampPan()
+            prefetch(currentPage)
+            invalidate()
+            return true
+        }
+
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            pinchInProgress = false
+        }
+    })
+
     private val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean { scroller.forceFinished(true); animating = false; return true }
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
-            parent.requestDisallowInterceptTouchEvent(true); offsetX -= dx; invalidate(); return true
+            parent.requestDisallowInterceptTouchEvent(true)
+            if (isZoomed()) {
+                panX -= dx
+                panY -= dy
+                clampPan()
+            } else {
+                offsetX -= dx
+            }
+            invalidate()
+            return true
         }
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+            if (isZoomed()) return true
             val t = if (vx > 300) currentPage - 1 else if (vx < -300) currentPage + 1 else currentPage
             animateTo(t.coerceIn(0, pageCount - 1)); return true
         }
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            if (isZoomed()) {
+                listener?.onPageTap()
+                return true
+            }
             val x = e.x
             when { x < width * 0.25f -> goToPage(currentPage - 1); x > width * 0.75f -> goToPage(currentPage + 1); else -> listener?.onPageTap() }
             return true
@@ -68,20 +130,57 @@ class PdfBookView @JvmOverloads constructor(
     init { setBackgroundColor(pageBackgroundColor) }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
-        super.onSizeChanged(w, h, ow, oh); vw = w; vh = h; offsetX = 0f; recycleAll()
+        super.onSizeChanged(w, h, ow, oh)
+        vw = w
+        vh = h
+        offsetX = 0f
+        panX = 0f
+        panY = 0f
+        recycleAll()
         if (w > 0 && h > 0) prefetch(currentPage)
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (vw <= 0 || vh <= 0 || pageCount <= 0) return
-        if (offsetX > 0 && currentPage > 0) drawPage(canvas, currentPage - 1, (-vw + offsetX).toInt(), 0, vw, vh)
-        drawPage(canvas, currentPage, offsetX.toInt(), 0, vw, vh)
-        if (offsetX < 0 && currentPage < pageCount - 1) drawPage(canvas, currentPage + 1, (vw + offsetX).toInt(), 0, vw, vh)
+        val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
+        val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
+
+        if (isZoomed()) {
+            val x = ((vw - renderW) / 2f + panX).roundToInt()
+            val y = ((vh - renderH) / 2f + panY).roundToInt()
+            drawPage(canvas, currentPage, x, y, renderW, renderH)
+        } else {
+            if (offsetX > 0 && currentPage > 0) drawPage(canvas, currentPage - 1, (-vw + offsetX).toInt(), 0, vw, vh)
+            drawPage(canvas, currentPage, offsetX.toInt(), 0, vw, vh)
+            if (offsetX < 0 && currentPage < pageCount - 1) drawPage(canvas, currentPage + 1, (vw + offsetX).toInt(), 0, vw, vh)
+        }
+
         if (scroller.computeScrollOffset()) {
             offsetX = scroller.currX.toFloat(); postInvalidateOnAnimation()
             if (scroller.isFinished) finishTransition()
         }
+    }
+
+    private fun isZoomed(): Boolean = zoomFactor > 1.01f
+
+    private fun clampPan() {
+        if (vw <= 0 || vh <= 0) {
+            panX = 0f
+            panY = 0f
+            return
+        }
+        val renderW = vw * zoomFactor
+        val renderH = vh * zoomFactor
+        val maxPanX = ((renderW - vw) / 2f).coerceAtLeast(0f)
+        val maxPanY = ((renderH - vh) / 2f).coerceAtLeast(0f)
+        panX = panX.coerceIn(-maxPanX, maxPanX)
+        panY = panY.coerceIn(-maxPanY, maxPanY)
+    }
+
+    private fun cancelRenderJobs() {
+        renderJobs.values.forEach { it.cancel() }
+        renderJobs.clear()
     }
 
     private fun getReusableBitmap(w: Int, h: Int): Bitmap? {
@@ -120,11 +219,7 @@ class PdfBookView @JvmOverloads constructor(
         val reused = getReusableBitmap(w, h)
         renderJobs[page] = scope.launch {
             try {
-                val size = getPageSize?.invoke(page)
-                val zoom = if (size != null && size.first > 0 && size.second > 0) {
-                    minOf(w.toFloat() / size.first, h.toFloat() / size.second)
-                } else 0f
-                val bmp = renderPage?.invoke(page, w, h, zoom, reused)
+                val bmp = renderPage?.invoke(page, w, h, 0f, reused)
                 if (bmp != null && !bmp.isRecycled) {
                     val hld = holders[page]
                     if (hld != null && hld.w == w && hld.h == h) {
@@ -141,19 +236,24 @@ class PdfBookView @JvmOverloads constructor(
 
     private fun prefetch(center: Int) {
         if (vw <= 0 || vh <= 0) return
-        requestRender(center, vw, vh)
-        for (d in 1..pageCacheRadius) {
+        val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
+        val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
+        requestRender(center, renderW, renderH)
+
+        val radius = if (isZoomed()) 1 else pageCacheRadius
+        for (d in 1..radius) {
             val prev = center - d
             val next = center + d
-            if (prev >= 0) requestRender(prev, vw, vh)
-            if (next < pageCount) requestRender(next, vw, vh)
+            if (prev >= 0) requestRender(prev, renderW, renderH)
+            if (next < pageCount) requestRender(next, renderW, renderH)
         }
         evict()
     }
 
     private fun evict() {
-        val lo = (currentPage - pageCacheRadius).coerceAtLeast(0)
-        val hi = (currentPage + pageCacheRadius).coerceAtMost(pageCount - 1)
+        val radius = if (isZoomed()) 1 else pageCacheRadius
+        val lo = (currentPage - radius).coerceAtLeast(0)
+        val hi = (currentPage + radius).coerceAtMost(pageCount - 1)
         holders.keys.filter { it < lo || it > hi }.forEach { key ->
             recycleBitmap(holders.remove(key)?.bitmap)
         }
@@ -185,15 +285,37 @@ class PdfBookView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        val handled = detector.onTouchEvent(e)
+        val scaleHandled = scaleDetector.onTouchEvent(e)
+        val handled = if (!scaleDetector.isInProgress) detector.onTouchEvent(e) else true
         if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
-            if (!animating) { val t = vw * 0.2f; when { offsetX > t -> animateTo(currentPage - 1); offsetX < -t -> animateTo(currentPage + 1); else -> animateTo(currentPage) } }
+            if (!animating && !pinchInProgress && !isZoomed()) {
+                val t = vw * 0.2f
+                when {
+                    offsetX > t -> animateTo(currentPage - 1)
+                    offsetX < -t -> animateTo(currentPage + 1)
+                    else -> animateTo(currentPage)
+                }
+            }
         }
-        return handled || super.onTouchEvent(e)
+        return scaleHandled || handled || super.onTouchEvent(e)
     }
 
-    fun goToPage(p: Int) { val t = p.coerceIn(0, pageCount - 1); if (t != currentPage) animateTo(t) }
-    fun setPage(p: Int) { currentPage = p.coerceIn(0, pageCount - 1); offsetX = 0f; recycleAll(); listener?.onPageChanged(currentPage); prefetch(currentPage); invalidate() }
+    fun goToPage(p: Int) {
+        val t = p.coerceIn(0, pageCount - 1)
+        if (t == currentPage) return
+        if (isZoomed()) setPage(t) else animateTo(t)
+    }
+
+    fun setPage(p: Int) {
+        currentPage = p.coerceIn(0, pageCount - 1)
+        offsetX = 0f
+        panX = 0f
+        panY = 0f
+        recycleAll()
+        listener?.onPageChanged(currentPage)
+        prefetch(currentPage)
+        invalidate()
+    }
     fun cleanup() { scope.cancel(); recycleAll() }
 
     private class PageHolder(var w: Int, var h: Int) { var bitmap: Bitmap? = null }
