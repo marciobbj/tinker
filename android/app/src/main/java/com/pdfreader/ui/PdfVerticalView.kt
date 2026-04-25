@@ -46,9 +46,10 @@ class PdfVerticalView @JvmOverloads constructor(
     private var pageHeights = IntArray(0)
     private var contentMaxWidth = 0
     private val minZoom = 1.0f
-    private val maxZoom = 4.0f
+    private val maxZoom = 2.0f
     private var zoomFactor = 1.0f
     private var panX = 0f
+    private var pinchInProgress = false
 
     // Track last visible range to avoid evicting every frame
     private var lastEvictFirst = -1
@@ -81,12 +82,17 @@ class PdfVerticalView @JvmOverloads constructor(
     }
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+            pinchInProgress = true
+            return true
+        }
+
         override fun onScale(detector: ScaleGestureDetector): Boolean {
             if (width <= 0 || height <= 0 || pageCount <= 0) return false
 
             val oldZoom = zoomFactor
             val newZoom = (oldZoom * detector.scaleFactor).coerceIn(minZoom, maxZoom)
-            if (kotlin.math.abs(newZoom - oldZoom) < 0.001f) return false
+            if (kotlin.math.abs(newZoom - oldZoom) < 0.01f) return false
 
             val oldOffsets = pageOffsets
             val oldHeights = pageHeights
@@ -101,7 +107,6 @@ class PdfVerticalView @JvmOverloads constructor(
                 panX = 0f
             }
 
-            cancelRenderJobs()
             rebuildLayout(width, height)
 
             if (pageOffsets.isNotEmpty()) {
@@ -115,6 +120,11 @@ class PdfVerticalView @JvmOverloads constructor(
             clampPanX()
             invalidate()
             return true
+        }
+
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            pinchInProgress = false
+            invalidate()
         }
     })
 
@@ -207,7 +217,9 @@ class PdfVerticalView @JvmOverloads constructor(
                 lastEvictFirst = firstVis
                 lastEvictLast = lastVis
                 evict(firstVis, lastVis)
-                prefetch(firstVis, lastVis, vw, zoom)
+                if (!isZoomed()) {
+                    prefetch(firstVis, lastVis, vw, zoom)
+                }
             }
         }
         if (scroller.computeScrollOffset()) { scrollTo(0, scroller.currY); postInvalidateOnAnimation() }
@@ -235,7 +247,10 @@ class PdfVerticalView @JvmOverloads constructor(
     private fun drawPage(canvas: Canvas, page: Int, x: Int, y: Int, w: Int, h: Int) {
         val holder = holders.getOrPut(page) { PageHolder(w, h) }
         if (holder.w != w || holder.h != h) {
-            recycleBitmap(holder.bitmap); holder.bitmap = null
+            if (!pinchInProgress) {
+                recycleBitmap(holder.bitmap)
+                holder.bitmap = null
+            }
             holder.w = w; holder.h = h
         }
         paint.color = pageBackgroundColor
@@ -250,7 +265,9 @@ class PdfVerticalView @JvmOverloads constructor(
         } else {
             paint.color = loadingPlaceholderColor
             canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
-            requestRender(page, w, h)
+            if (!pinchInProgress) {
+                requestRender(page, w, h)
+            }
         }
     }
 
@@ -291,8 +308,9 @@ class PdfVerticalView @JvmOverloads constructor(
     }
 
     private fun evict(first: Int, last: Int) {
-        val lo = (first - pageBuffer).coerceAtLeast(0)
-        val hi = (last + pageBuffer).coerceAtMost(pageCount - 1)
+        val buffer = if (isZoomed()) 0 else pageBuffer
+        val lo = (first - buffer).coerceAtLeast(0)
+        val hi = (last + buffer).coerceAtMost(pageCount - 1)
         holders.keys.filter { it < lo || it > hi }.forEach { key ->
             recycleBitmap(holders.remove(key)?.bitmap)
         }

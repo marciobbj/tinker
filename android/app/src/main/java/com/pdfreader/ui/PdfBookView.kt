@@ -42,7 +42,7 @@ class PdfBookView @JvmOverloads constructor(
     private var animating = false
     private val pageCacheRadius = 2
     private val minZoom = 1.0f
-    private val maxZoom = 4.0f
+    private val maxZoom = 2.0f
     private var zoomFactor = 1.0f
     private var panX = 0f
     private var panY = 0f
@@ -69,7 +69,7 @@ class PdfBookView @JvmOverloads constructor(
             if (vw <= 0 || vh <= 0) return false
             val oldZoom = zoomFactor
             val newZoom = (oldZoom * detector.scaleFactor).coerceIn(minZoom, maxZoom)
-            if (kotlin.math.abs(newZoom - oldZoom) < 0.001f) return false
+            if (kotlin.math.abs(newZoom - oldZoom) < 0.01f) return false
 
             val fx = detector.focusX - vw / 2f
             val fy = detector.focusY - vh / 2f
@@ -85,15 +85,15 @@ class PdfBookView @JvmOverloads constructor(
                 panY = 0f
             }
 
-            cancelRenderJobs()
             clampPan()
-            prefetch(currentPage)
             invalidate()
             return true
         }
 
         override fun onScaleEnd(detector: ScaleGestureDetector) {
             pinchInProgress = false
+            prefetch(currentPage)
+            invalidate()
         }
     })
 
@@ -200,7 +200,10 @@ class PdfBookView @JvmOverloads constructor(
     private fun drawPage(canvas: Canvas, page: Int, x: Int, y: Int, w: Int, h: Int) {
         val holder = holders.getOrPut(page) { PageHolder(w, h) }
         if (holder.w != w || holder.h != h) {
-            recycleBitmap(holder.bitmap); holder.bitmap = null
+            if (!pinchInProgress) {
+                recycleBitmap(holder.bitmap)
+                holder.bitmap = null
+            }
             holder.w = w; holder.h = h
         }
         paint.color = pageBackgroundColor
@@ -210,7 +213,9 @@ class PdfBookView @JvmOverloads constructor(
             canvas.withSave { clipRect(x, y, x + w, y + h); drawBitmap(bmp, Rect(0, 0, bmp.width, bmp.height), Rect(x, y, x + w, y + h), paint) }
         } else {
             paint.color = loadingPlaceholderColor; canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
-            requestRender(page, w, h)
+            if (!pinchInProgress) {
+                requestRender(page, w, h)
+            }
         }
     }
 
@@ -240,7 +245,7 @@ class PdfBookView @JvmOverloads constructor(
         val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
         requestRender(center, renderW, renderH)
 
-        val radius = if (isZoomed()) 1 else pageCacheRadius
+        val radius = if (isZoomed()) 0 else pageCacheRadius
         for (d in 1..radius) {
             val prev = center - d
             val next = center + d
@@ -251,7 +256,7 @@ class PdfBookView @JvmOverloads constructor(
     }
 
     private fun evict() {
-        val radius = if (isZoomed()) 1 else pageCacheRadius
+        val radius = if (isZoomed()) 0 else pageCacheRadius
         val lo = (currentPage - radius).coerceAtLeast(0)
         val hi = (currentPage + radius).coerceAtMost(pageCount - 1)
         holders.keys.filter { it < lo || it > hi }.forEach { key ->
