@@ -135,15 +135,11 @@ class ReaderActivity : AppCompatActivity() {
     private fun loadBookmark(uri: Uri) {
         val saved = bookmarkStore.load(uri.toString())
         saved?.let { bm ->
-            if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
-                bookView?.setPage(bm.pageNumber)
-            } else {
-                verticalView?.scrollToPage(bm.pageNumber)
-            }
+            applyPageToCurrentView(bm.pageNumber)
         }
     }
 
-    private fun setupReader(mode: Int) {
+    private fun setupReader(mode: Int, initialPage: Int = 0) {
         verticalView?.cleanup()
         bookView?.cleanup()
         container.removeAllViews()
@@ -152,6 +148,7 @@ class ReaderActivity : AppCompatActivity() {
 
         val doc = pdfDocument ?: return
         val pageCount = doc.pageCount
+        val targetPage = initialPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
 
         val onTap = {
             toggleUi()
@@ -169,6 +166,7 @@ class ReaderActivity : AppCompatActivity() {
             }
             container.addView(view)
             bookView = view
+            view.setPage(targetPage)
         } else {
             currentMode = SettingsStore.DISPLAY_MODE_VERTICAL
             val view = PdfVerticalView(this)
@@ -182,7 +180,31 @@ class ReaderActivity : AppCompatActivity() {
             }
             container.addView(view)
             verticalView = view
+            view.post { view.scrollToPage(targetPage) }
         }
+
+        updatePageIndicator(targetPage)
+    }
+
+    private fun applyPageToCurrentView(page: Int) {
+        val pageCount = pdfDocument?.pageCount ?: return
+        val targetPage = page.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+        if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+            bookView?.setPage(targetPage)
+        } else {
+            verticalView?.post { verticalView?.scrollToPage(targetPage) }
+        }
+        updatePageIndicator(targetPage)
+    }
+
+    private fun getCurrentReaderPage(): Int {
+        val pageCount = (pdfDocument?.pageCount ?: 1).coerceAtLeast(1)
+        val rawPage = if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+            bookView?.currentPage ?: 0
+        } else {
+            verticalView?.getCurrentPage() ?: 0
+        }
+        return rawPage.coerceIn(0, pageCount - 1)
     }
 
     private fun setupControls() {
@@ -206,6 +228,7 @@ class ReaderActivity : AppCompatActivity() {
         }
 
         btnMode.setOnClickListener {
+            val currentPage = getCurrentReaderPage()
             val newMode = if (currentMode == SettingsStore.DISPLAY_MODE_VERTICAL)
                 SettingsStore.DISPLAY_MODE_BOOK else SettingsStore.DISPLAY_MODE_VERTICAL
             lifecycleScope.launch {
@@ -213,8 +236,8 @@ class ReaderActivity : AppCompatActivity() {
                     pdfDocument?.ensurePageSizesCached()
                 }
                 currentMode = newMode
-                setupReader(newMode)
-                saveBookmark()
+                setupReader(newMode, currentPage)
+                saveBookmark(currentPage)
             }
         }
 
@@ -250,14 +273,14 @@ class ReaderActivity : AppCompatActivity() {
         pageIndicator.text = "Página ${cp + 1} / $pc"
     }
 
-    private fun saveBookmark() {
+    private fun saveBookmark(pageOverride: Int? = null) {
         if (!documentReady) return
         val uri = intent.data?.toString() ?: return
         try {
-            val currentPage = when (currentMode) {
+            val currentPage = (pageOverride ?: when (currentMode) {
                 SettingsStore.DISPLAY_MODE_BOOK -> bookView?.currentPage ?: 0
                 else -> verticalView?.getCurrentPage() ?: 0
-            }
+            }).coerceAtLeast(0)
             val bm = BookmarkStore.Bookmark(
                 uri = uri,
                 title = documentTitle,
