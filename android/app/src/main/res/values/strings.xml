@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">PDF Reader</string>
+    <string name="open_pdf">Abrir PDF</string>
+    <string name="no_recent">Nenhum PDF recente.\nToque no + para abrir.</string>
+    <string name="back">Voltar</string>
+    <string name="toggle_dark">Alternar modo escuro</string>
+    <string name="bookmark">Salvar posição</string>
+    <string name="previous">Página anterior</string>
+    <string name="next">Próxima página</string>
+    <string name="switch_mode">Alternar modo de leitura</string>
+</resources>

@@ -1,0 +1,44 @@
+# Gradle
+.gradle/
+build/
+*.apk
+*.aab
+.cxx/
+
+# Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+local.properties
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+android/app/build/
+core/build/
+
+# MuPDF (já versionada, não versionar builds)
+mupdf/build/
+mupdf/.cxx/
+
+# Binários compilados (libs geradas)
+# Manter apenas libs/ versionado, não build intermediários
+mupdf/obj/
+
+# Cache local
+app/src/main/assets/cache/
+
+# Arquivos temporários
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# SharedPreferences de teste
+*.xml~
