@@ -1,10 +1,10 @@
 <resources>
     <!-- Base application theme -->
     <style name="Theme.PdfReader" parent="Theme.Material3.Light.NoActionBar">
-        <item name="colorPrimary">@color/purple_500</item>
-        <item name="colorOnPrimary">@android:color/white</item>
-        <item name="colorPrimaryContainer">@color/purple_100</item>
-        <item name="colorOnPrimaryContainer">@color/purple_900</item>
+        <item name="colorPrimary">@color/orange_500</item>
+        <item name="colorOnPrimary">@android:color/black</item>
+        <item name="colorPrimaryContainer">@color/orange_100</item>
+        <item name="colorOnPrimaryContainer">@color/orange_900</item>
         <item name="android:colorBackground">@android:color/white</item>
         <item name="colorSurface">@android:color/white</item>
         <item name="colorOnSurface">@android:color/black</item>
@@ -14,10 +14,10 @@
     </style>
 
     <style name="Theme.PdfReader.Dark" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="colorPrimary">@color/purple_300</item>
+        <item name="colorPrimary">@color/orange_300</item>
         <item name="colorOnPrimary">@android:color/black</item>
-        <item name="colorPrimaryContainer">@color/purple_700</item>
-        <item name="colorOnPrimaryContainer">@color/purple_100</item>
+        <item name="colorPrimaryContainer">@color/orange_700</item>
+        <item name="colorOnPrimaryContainer">@android:color/white</item>
         <item name="android:colorBackground">@android:color/black</item>
         <item name="colorSurface">#1C1C1C</item>
         <item name="colorOnSurface">@android:color/white</item>
