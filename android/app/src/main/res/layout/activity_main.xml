@@ -22,7 +22,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="PDF Reader"
+                android:text="@string/home_title"
                 android:textSize="24sp"
                 android:textStyle="bold"
                 android:textColor="?attr/colorPrimary" />
@@ -31,7 +31,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="Documentos recentes"
+                android:text="@string/home_subtitle"
                 android:textSize="14sp"
                 android:textColor="?android:attr/textColorSecondary" />
 
@@ -52,7 +52,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:text="Nenhum documento recente.\nToque no botão + para abrir um PDF."
+                android:text="@string/empty_recent"
                 android:textSize="15sp"
                 android:lineSpacingExtra="4dp"
                 android:textColor="?android:attr/textColorSecondary"

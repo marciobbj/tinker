@@ -110,8 +110,12 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) { "PDF" }
             }
             holder.title.text = displayTitle
-            val modeStr = if (bm.displayMode == SettingsStore.DISPLAY_MODE_BOOK) "Livro" else "Vertical"
-            holder.subtitle.text = "Pág. ${bm.pageNumber + 1} · $modeStr"
+            val modeStr = if (bm.displayMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                getString(R.string.mode_book)
+            } else {
+                getString(R.string.mode_vertical)
+            }
+            holder.subtitle.text = getString(R.string.page_mode_format, bm.pageNumber + 1, modeStr)
             holder.itemView.setOnClickListener {
                 openReader(Uri.parse(bm.uri))
             }

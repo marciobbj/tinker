@@ -269,7 +269,7 @@ class ReaderActivity : AppCompatActivity() {
             if (!documentReady) return@setOnClickListener
             saveBookmark()
             AlertDialog.Builder(this)
-                .setMessage("Posição salva com sucesso!")
+                .setMessage(R.string.bookmark_saved)
                 .setPositiveButton("OK", null)
                 .show()
         }
@@ -326,7 +326,7 @@ class ReaderActivity : AppCompatActivity() {
     private fun updatePageIndicator(page: Int = -1) {
         val pc = pdfDocument?.pageCount ?: 0
         val cp = if (page >= 0) page else (bookView?.currentPage ?: 0)
-        pageIndicator.text = "Página ${cp + 1} / $pc"
+        pageIndicator.text = getString(R.string.page_indicator_format, cp + 1, pc)
     }
 
     private fun saveBookmark(pageOverride: Int? = null) {

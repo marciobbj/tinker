@@ -76,7 +76,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:gravity="center"
-            android:text="Página 1 / 1"
+            android:text="@string/page_indicator_default"
             android:textColor="?attr/colorOnSurface"
             android:textSize="14sp" />
 
