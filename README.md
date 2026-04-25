@@ -1,7 +1,7 @@
 <div align="center">
 	<img src="assets/tinker-logo.svg" alt="Tinker" width="132" />
 	<h1>Tinker</h1>
-	<p>Tinker is a minimalist PDF reader for Android with a C++ core.</p>
+	<p>Tinker is a minimalist PDF reader for Android.</p>
 </div>
 
 ## Features
