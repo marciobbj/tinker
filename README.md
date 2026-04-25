@@ -59,7 +59,7 @@ The core in `core/` is independent from Android. To port it to another platform:
 
 ## Suggested next steps
 
-- [ ] Add pinch-to-zoom
+- [x] Add pinch-to-zoom
 - [ ] Text search with highlight
 - [ ] Outline/index navigation
 - [ ] On-disk bitmap cache (LRU)
