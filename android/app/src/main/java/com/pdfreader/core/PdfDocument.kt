@@ -106,6 +106,10 @@ class PdfDocument(private val filePath: String) {
     /**
      * Render a page to a Bitmap. Runs on the single render thread.
      * Returns null if the document is closed or the page is invalid.
+     *
+     * Uses Dispatchers.Default for pre/post work to avoid blocking the render
+     * dispatcher with coroutine scheduling overhead. The actual JNI call is
+     * dispatched to renderDispatcher.
      */
     suspend fun renderPage(pageNumber: Int, width: Int, height: Int, zoom: Float = 1.0f, reusedBitmap: Bitmap? = null): Bitmap? {
         if (!isOpen || pageNumber < 0 || pageNumber >= _pageCount) return null

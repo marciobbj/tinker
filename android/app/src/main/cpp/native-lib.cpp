@@ -84,33 +84,16 @@ Java_com_pdfreader_core_PdfNative_nativeRenderPage(JNIEnv* env, jclass clazz, jl
     if (info.format != ANDROID_BITMAP_FORMAT_RGBA_8888) return JNI_FALSE;
     if (AndroidBitmap_lockPixels(env, bitmap, &pixels) < 0) return JNI_FALSE;
 
-    // Render outside any lock — this is the heavy operation
-    RenderedPage page = engine->renderPage(pageNumber, targetWidth, targetHeight, zoom);
-
-    uint8_t* dst = static_cast<uint8_t*>(pixels);
-    int dstStride = info.stride;
-
-    // Clear bitmap to white first
-    for (int y = 0; y < (int)info.height; ++y) {
-        memset(dst + y * dstStride, 0xFF, info.width * 4);
-    }
-
-    if (!page.pixels.empty() && page.width > 0 && page.height > 0) {
-        // Center the rendered content in the target bitmap
-        int copyWidth = std::min((int)info.width, page.width);
-        int copyHeight = std::min((int)info.height, page.height);
-        int offsetX = ((int)info.width - copyWidth) / 2;
-        int offsetY = ((int)info.height - copyHeight) / 2;
-
-        for (int y = 0; y < copyHeight; ++y) {
-            uint8_t* srcRow = page.pixels.data() + y * page.width * 4;
-            uint8_t* dstRow = dst + (y + offsetY) * dstStride + offsetX * 4;
-            memcpy(dstRow, srcRow, copyWidth * 4);
-        }
-    }
+    // Render directly into the bitmap pixels — no intermediate buffer
+    int outW = 0, outH = 0;
+    bool ok = engine->renderPageDirect(
+        pageNumber, targetWidth, targetHeight, zoom,
+        static_cast<uint8_t*>(pixels), info.stride, info.width, info.height,
+        &outW, &outH
+    );
 
     AndroidBitmap_unlockPixels(env, bitmap);
-    return (!page.pixels.empty()) ? JNI_TRUE : JNI_FALSE;
+    return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

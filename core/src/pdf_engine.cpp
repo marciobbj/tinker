@@ -191,6 +191,107 @@ RenderedPage PdfEngine::renderPage(int pageNumber, int targetWidth, int targetHe
     return result;
 }
 
+bool PdfEngine::renderPageDirect(int pageNumber, int targetWidth, int targetHeight, float zoom,
+                                  uint8_t* dstPixels, int dstStride, int dstWidth, int dstHeight,
+                                  int* outWidth, int* outHeight) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return false;
+    if (!dstPixels || dstWidth <= 0 || dstHeight <= 0) return false;
+
+    fz_page* page = nullptr;
+    fz_pixmap* pix = nullptr;
+    bool success = false;
+
+    fz_try(m_ctx) {
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        fz_rect bounds = fz_bound_page(m_ctx, page);
+
+        float pageWidth = bounds.x1 - bounds.x0;
+        float pageHeight = bounds.y1 - bounds.y0;
+
+        float scale = zoom;
+        if (scale <= 0.0f) {
+            float scaleX = targetWidth / pageWidth;
+            float scaleY = targetHeight / pageHeight;
+            scale = std::min(scaleX, scaleY);
+        }
+        if (!std::isfinite(scale) || scale <= 0.0f) {
+            fz_throw(m_ctx, FZ_ERROR_ARGUMENT, "invalid page scale");
+        }
+
+        fz_matrix ctm = fz_scale(scale, scale);
+
+        pix = fz_new_pixmap_from_page(m_ctx, page, ctm, fz_device_rgb(m_ctx), 0);
+
+        if (pix) {
+            int n = fz_pixmap_components(m_ctx, pix);
+            int pw = fz_pixmap_width(m_ctx, pix);
+            int ph = fz_pixmap_height(m_ctx, pix);
+            unsigned char* samples = fz_pixmap_samples(m_ctx, pix);
+            int srcStride = fz_pixmap_stride(m_ctx, pix);
+
+            if (outWidth) *outWidth = pw;
+            if (outHeight) *outHeight = ph;
+
+            // Clear destination to white
+            for (int y = 0; y < dstHeight; ++y) {
+                memset(dstPixels + y * dstStride, 0xFF, dstWidth * 4);
+            }
+
+            // Center the rendered content in the destination
+            int copyWidth = std::min(dstWidth, pw);
+            int copyHeight = std::min(dstHeight, ph);
+            int offsetX = (dstWidth - copyWidth) / 2;
+            int offsetY = (dstHeight - copyHeight) / 2;
+
+            // Write directly into the destination buffer — no intermediate allocation
+            if (n == 3) {
+                for (int y = 0; y < copyHeight; ++y) {
+                    unsigned char* src = samples + y * srcStride;
+                    unsigned char* dst = dstPixels + (y + offsetY) * dstStride + offsetX * 4;
+                    for (int x = 0; x < copyWidth; ++x) {
+                        dst[0] = src[0];
+                        dst[1] = src[1];
+                        dst[2] = src[2];
+                        dst[3] = 0xFF;
+                        src += 3;
+                        dst += 4;
+                    }
+                }
+            } else if (n == 4) {
+                for (int y = 0; y < copyHeight; ++y) {
+                    unsigned char* src = samples + y * srcStride;
+                    unsigned char* dst = dstPixels + (y + offsetY) * dstStride + offsetX * 4;
+                    memcpy(dst, src, copyWidth * 4);
+                }
+            } else {
+                for (int y = 0; y < copyHeight; ++y) {
+                    for (int x = 0; x < copyWidth; ++x) {
+                        unsigned char* src = samples + y * srcStride + x * n;
+                        unsigned char* dst = dstPixels + (y + offsetY) * dstStride + (x + offsetX) * 4;
+                        dst[0] = src[0];
+                        dst[1] = src[1];
+                        dst[2] = src[2];
+                        dst[3] = (n >= 4) ? src[3] : 0xFF;
+                    }
+                }
+            }
+
+            if (m_darkMode) {
+                applyDarkMode(dstPixels, dstWidth, dstHeight);
+            }
+
+            success = true;
+        }
+    }
+    fz_catch(m_ctx) {}
+
+    if (pix) fz_drop_pixmap(m_ctx, pix);
+    if (page) fz_drop_page(m_ctx, page);
+
+    return success;
+}
+
 std::string PdfEngine::extractText(int pageNumber) const {
     // Stub: text extraction API changed in newer MuPDF versions.
     // Re-implement using fz_stext_page if needed.

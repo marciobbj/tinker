@@ -52,6 +52,15 @@ class PdfBookView @JvmOverloads constructor(
     private var panY = 0f
     private var pinchInProgress = false
 
+    // ── Crossfade state ──
+    // When transitioning pages, we fade out the old page and fade in the new one.
+    // This masks any remaining render latency so the user never sees a gray placeholder.
+    private var crossfadeAlpha = 255          // 0..255 — alpha of the current (new) page
+    private var crossfadeOldBitmap: Bitmap? = null
+    private var crossfadeInProgress = false
+    private var crossfadeStartTime = 0L
+    private val crossfadeDurationMs = 150L    // keep short — just enough to mask render
+
     private val isDarkTheme: Boolean
         get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
@@ -150,14 +159,43 @@ class PdfBookView @JvmOverloads constructor(
         val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
         val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
 
+        // ── Crossfade: draw old page underneath if active ──
+        if (crossfadeInProgress && crossfadeOldBitmap != null && !crossfadeOldBitmap!!.isRecycled) {
+            val elapsed = System.currentTimeMillis() - crossfadeStartTime
+            val progress = (elapsed.toFloat() / crossfadeDurationMs).coerceIn(0f, 1f)
+            crossfadeAlpha = (progress * 255).roundToInt()
+
+            // Draw old page fading out
+            paint.alpha = 255 - crossfadeAlpha
+            val oldBmp = crossfadeOldBitmap!!
+            canvas.withSave {
+                drawBitmap(oldBmp, Rect(0, 0, oldBmp.width, oldBmp.height), Rect(0, 0, vw, vh), paint)
+            }
+            paint.alpha = 255
+
+            if (progress >= 1f) {
+                // Crossfade complete — recycle old bitmap
+                crossfadeInProgress = false
+                recycleBitmap(crossfadeOldBitmap)
+                crossfadeOldBitmap = null
+                crossfadeAlpha = 255
+            } else {
+                // Keep animating
+                postInvalidateOnAnimation()
+            }
+        }
+
+        // ── Draw current page(s) with current alpha ──
+        val drawAlpha = if (crossfadeInProgress) crossfadeAlpha else 255
+
         if (isZoomed()) {
             val x = ((vw - renderW) / 2f + panX).roundToInt()
             val y = ((vh - renderH) / 2f + panY).roundToInt()
-            drawPage(canvas, currentPage, x, y, renderW, renderH)
+            drawPage(canvas, currentPage, x, y, renderW, renderH, drawAlpha)
         } else {
-            if (offsetX > 0 && currentPage > 0) drawPage(canvas, currentPage - 1, (-vw + offsetX).toInt(), 0, vw, vh)
-            drawPage(canvas, currentPage, offsetX.toInt(), 0, vw, vh)
-            if (offsetX < 0 && currentPage < pageCount - 1) drawPage(canvas, currentPage + 1, (vw + offsetX).toInt(), 0, vw, vh)
+            if (offsetX > 0 && currentPage > 0) drawPage(canvas, currentPage - 1, (-vw + offsetX).toInt(), 0, vw, vh, drawAlpha)
+            drawPage(canvas, currentPage, offsetX.toInt(), 0, vw, vh, drawAlpha)
+            if (offsetX < 0 && currentPage < pageCount - 1) drawPage(canvas, currentPage + 1, (vw + offsetX).toInt(), 0, vw, vh, drawAlpha)
         }
 
         if (scroller.computeScrollOffset()) {
@@ -203,7 +241,7 @@ class PdfBookView @JvmOverloads constructor(
         }
     }
 
-    private fun drawPage(canvas: Canvas, page: Int, x: Int, y: Int, w: Int, h: Int) {
+    private fun drawPage(canvas: Canvas, page: Int, x: Int, y: Int, w: Int, h: Int, alpha: Int = 255) {
         val holder = holders.getOrPut(page) { PageHolder(w, h) }
         if (holder.w != w || holder.h != h) {
             if (holder.bitmap != null || !pinchInProgress) {
@@ -212,13 +250,21 @@ class PdfBookView @JvmOverloads constructor(
             holder.w = w; holder.h = h
         }
 
+        // Draw page background
         paint.color = pageBackgroundColor
+        paint.alpha = alpha
         canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
+        paint.alpha = 255
+
         val bmp = holder.bitmap?.takeUnless { it.isRecycled }
         if (bmp != null) {
+            paint.alpha = alpha
             canvas.withSave { clipRect(x, y, x + w, y + h); drawBitmap(bmp, Rect(0, 0, bmp.width, bmp.height), Rect(x, y, x + w, y + h), paint) }
-        } else {
-            paint.color = loadingPlaceholderColor; canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
+            paint.alpha = 255
+        } else if (!crossfadeInProgress) {
+            // Only show placeholder if we're NOT crossfading (crossfade masks this)
+            paint.color = loadingPlaceholderColor
+            canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
         }
 
         if (!pinchInProgress && (holder.needsRerender || bmp == null)) {
@@ -226,8 +272,22 @@ class PdfBookView @JvmOverloads constructor(
         }
     }
 
-    private fun requestRender(page: Int, w: Int, h: Int) {
+    /**
+     * Request a render for a page. If urgent=true, cancel all other pending
+     * render jobs first so this page gets the render thread immediately.
+     */
+    private fun requestRender(page: Int, w: Int, h: Int, urgent: Boolean = false) {
         if (page < 0 || page >= pageCount) return
+
+        if (urgent) {
+            // Cancel all non-matching render jobs so the urgent page gets priority
+            val toCancel = renderJobs.keys.filter { it != page }
+            toCancel.forEach { key ->
+                renderJobs.remove(key)?.cancel()
+                renderJobTargets.remove(key)
+                renderJobTokens.remove(key)
+            }
+        }
 
         val runningJob = renderJobs[page]
         val runningTarget = renderJobTargets[page]
@@ -273,7 +333,9 @@ class PdfBookView @JvmOverloads constructor(
         if (vw <= 0 || vh <= 0) return
         val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
         val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
-        requestRender(center, renderW, renderH)
+
+        // Render the current page with highest priority
+        requestRender(center, renderW, renderH, urgent = true)
 
         if (!isZoomed()) {
             // Prioritize forward reading so the next page is usually ready before swipe ends.
@@ -325,14 +387,57 @@ class PdfBookView @JvmOverloads constructor(
     private fun animateTo(page: Int) {
         animating = true
         val target = when { page < currentPage -> vw.toFloat(); page > currentPage -> -vw.toFloat(); else -> 0f }
+
+        // Pre-request the target page urgently so it starts rendering NOW,
+        // while the scroll animation is still playing (250ms of free time).
+        if (page != currentPage && page in 0 until pageCount) {
+            requestRender(page, vw, vh, urgent = true)
+        }
+
         scroller.startScroll(offsetX.toInt(), 0, (target - offsetX).toInt(), 0, 250); invalidate()
     }
 
     private fun finishTransition() {
         animating = false
+        val oldPage = currentPage
         if (offsetX > vw / 2 && currentPage > 0) currentPage--
         else if (offsetX < -vw / 2 && currentPage < pageCount - 1) currentPage++
+
+        // Start crossfade if the page actually changed
+        if (oldPage != currentPage) {
+            startCrossfade(oldPage)
+        }
+
         offsetX = 0f; listener?.onPageChanged(currentPage); prefetch(currentPage); invalidate()
+    }
+
+    /**
+     * Start a crossfade transition from the old page to the new one.
+     * Captures the old page's bitmap (or creates a snapshot) so we can
+     * blend it out while the new page fades in.
+     */
+    private fun startCrossfade(oldPage: Int) {
+        // Recycle any previous crossfade bitmap
+        recycleBitmap(crossfadeOldBitmap)
+        crossfadeOldBitmap = null
+
+        val oldHolder = holders[oldPage]
+        val oldBmp = oldHolder?.bitmap?.takeUnless { it.isRecycled }
+        if (oldBmp != null) {
+            // If the new page already has a bitmap ready, skip crossfade entirely
+            val newHolder = holders[currentPage]
+            val newBmp = newHolder?.bitmap?.takeUnless { it.isRecycled }
+            if (newBmp != null) {
+                // New page is already rendered — no need to crossfade
+                return
+            }
+
+            // Copy the old bitmap for crossfade (can't hold reference since holder may recycle it)
+            crossfadeOldBitmap = oldBmp.copy(Bitmap.Config.ARGB_8888, false)
+            crossfadeInProgress = true
+            crossfadeStartTime = System.currentTimeMillis()
+            crossfadeAlpha = 0
+        }
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -358,16 +463,30 @@ class PdfBookView @JvmOverloads constructor(
     }
 
     fun setPage(p: Int) {
+        val oldPage = currentPage
         currentPage = p.coerceIn(0, pageCount - 1)
         offsetX = 0f
         panX = 0f
         panY = 0f
+
+        // Start crossfade if there was a page change and we have old content
+        if (oldPage != currentPage) {
+            startCrossfade(oldPage)
+        }
+
+        // Recycle all holders except the crossfade bitmap (already copied)
         recycleAll()
         listener?.onPageChanged(currentPage)
         prefetch(currentPage)
         invalidate()
     }
-    fun cleanup() { scope.cancel(); recycleAll() }
+
+    fun cleanup() {
+        scope.cancel()
+        recycleAll()
+        recycleBitmap(crossfadeOldBitmap)
+        crossfadeOldBitmap = null
+    }
 
     private class PageHolder(var w: Int, var h: Int) {
         var bitmap: Bitmap? = null

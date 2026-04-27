@@ -50,6 +50,13 @@ public:
     // Rendering
     RenderedPage renderPage(int pageNumber, int width, int height, float zoom = 1.0f) const;
 
+    // Direct rendering into a provided RGBA buffer (e.g. a locked Android Bitmap).
+    // Avoids the intermediate RenderedPage copy for better performance.
+    // Returns true on success. outWidth/outHeight receive the actual rendered dimensions.
+    bool renderPageDirect(int pageNumber, int targetWidth, int targetHeight, float zoom,
+                          uint8_t* dstPixels, int dstStride, int dstWidth, int dstHeight,
+                          int* outWidth, int* outHeight) const;
+
     // Text extraction (optional, for future search)
     std::string extractText(int pageNumber) const;
 
