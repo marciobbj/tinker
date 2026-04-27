@@ -140,7 +140,11 @@ class PdfBookView @JvmOverloads constructor(
         }
     })
 
-    init { setBackgroundColor(pageBackgroundColor) }
+    init {
+        // Solid background prevents the root layout's black from bleeding through
+        // in any edge cases (overshoot, sub-pixel gaps, etc.)
+        setBackgroundColor(pageBackgroundColor)
+    }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
@@ -156,6 +160,23 @@ class PdfBookView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (vw <= 0 || vh <= 0 || pageCount <= 0) return
+
+        // ── Update scroller FIRST so pages are drawn at the correct position ──
+        // Previously the offset was updated AFTER drawing, causing a 1-frame desync
+        // that flashed the background on the trailing edge.
+        if (scroller.computeScrollOffset()) {
+            offsetX = scroller.currX.toFloat()
+            // Clamp to prevent overshoot beyond page boundaries.
+            // OverScroller can slightly exceed the target, creating an uncovered
+            // strip (the black gap visible on the right edge).
+            offsetX = offsetX.coerceIn(-vw.toFloat(), vw.toFloat())
+            if (scroller.isFinished) {
+                finishTransition()
+            } else {
+                postInvalidateOnAnimation()
+            }
+        }
+
         val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
         val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
 
@@ -193,14 +214,12 @@ class PdfBookView @JvmOverloads constructor(
             val y = ((vh - renderH) / 2f + panY).roundToInt()
             drawPage(canvas, currentPage, x, y, renderW, renderH, drawAlpha)
         } else {
-            if (offsetX > 0 && currentPage > 0) drawPage(canvas, currentPage - 1, (-vw + offsetX).toInt(), 0, vw, vh, drawAlpha)
-            drawPage(canvas, currentPage, offsetX.toInt(), 0, vw, vh, drawAlpha)
-            if (offsetX < 0 && currentPage < pageCount - 1) drawPage(canvas, currentPage + 1, (vw + offsetX).toInt(), 0, vw, vh, drawAlpha)
-        }
-
-        if (scroller.computeScrollOffset()) {
-            offsetX = scroller.currX.toFloat(); postInvalidateOnAnimation()
-            if (scroller.isFinished) finishTransition()
+            val ox = offsetX.toInt()
+            // Always draw all adjacent pages during scroll to guarantee full
+            // pixel coverage — prevents any background from bleeding through.
+            if (currentPage > 0) drawPage(canvas, currentPage - 1, -vw + ox, 0, vw, vh, drawAlpha)
+            drawPage(canvas, currentPage, ox, 0, vw, vh, drawAlpha)
+            if (currentPage < pageCount - 1) drawPage(canvas, currentPage + 1, vw + ox, 0, vw, vh, drawAlpha)
         }
     }
 
@@ -250,11 +269,12 @@ class PdfBookView @JvmOverloads constructor(
             holder.w = w; holder.h = h
         }
 
-        // Draw page background
+        // Always draw a solid page-colored rect first. This is critical to prevent
+        // any gap from showing the parent's black background, regardless of
+        // whether a bitmap is ready or crossfade is active.
         paint.color = pageBackgroundColor
         paint.alpha = alpha
         canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
-        paint.alpha = 255
 
         val bmp = holder.bitmap?.takeUnless { it.isRecycled }
         if (bmp != null) {
@@ -262,10 +282,15 @@ class PdfBookView @JvmOverloads constructor(
             canvas.withSave { clipRect(x, y, x + w, y + h); drawBitmap(bmp, Rect(0, 0, bmp.width, bmp.height), Rect(x, y, x + w, y + h), paint) }
             paint.alpha = 255
         } else if (!crossfadeInProgress) {
-            // Only show placeholder if we're NOT crossfading (crossfade masks this)
+            // No bitmap and no crossfade — tint with placeholder color on top of page bg
             paint.color = loadingPlaceholderColor
+            paint.alpha = alpha
             canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), paint)
+            paint.alpha = 255
         }
+        // When crossfade IS active and bitmap not ready, the page background rect
+        // above still covers this region (same color as view bg = invisible),
+        // and the crossfade old-bitmap on top provides visual continuity.
 
         if (!pinchInProgress && (holder.needsRerender || bmp == null)) {
             requestRender(page, w, h)
@@ -403,12 +428,16 @@ class PdfBookView @JvmOverloads constructor(
         if (offsetX > vw / 2 && currentPage > 0) currentPage--
         else if (offsetX < -vw / 2 && currentPage < pageCount - 1) currentPage++
 
-        // Start crossfade if the page actually changed
+        // Start crossfade BEFORE prefetch/evict — we need the old holder's bitmap
+        // to still be alive when startCrossfade() copies it.
         if (oldPage != currentPage) {
             startCrossfade(oldPage)
         }
 
-        offsetX = 0f; listener?.onPageChanged(currentPage); prefetch(currentPage); invalidate()
+        offsetX = 0f; listener?.onPageChanged(currentPage)
+        // prefetch calls evict() which may recycle the old page holder,
+        // but that's fine — crossfade already copied the bitmap above.
+        prefetch(currentPage); invalidate()
     }
 
     /**
