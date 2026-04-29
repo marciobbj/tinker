@@ -17,4 +17,9 @@ object PdfNative {
     external fun nativeRenderPage(handle: Long, pageNumber: Int, bitmap: Bitmap, width: Int, height: Int, zoom: Float): Boolean
     external fun nativeSetDarkMode(handle: Long, enabled: Boolean)
     external fun nativeGetPageSize(handle: Long, pageNumber: Int): FloatArray?
+    external fun nativeGetSelectionQuads(handle: Long, pageNumber: Int, ax: Float, ay: Float, bx: Float, by: Float, mode: Int): FloatArray?
+    external fun nativeCopySelection(handle: Long, pageNumber: Int, ax: Float, ay: Float, bx: Float, by: Float, mode: Int): String
+    external fun nativeAddMarkupAnnotation(handle: Long, pageNumber: Int, type: Int, quads: FloatArray,
+                                           r: Float, g: Float, b: Float, opacity: Float): Boolean
+    external fun nativeSaveDocument(handle: Long): Boolean
 }

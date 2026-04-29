@@ -6,14 +6,18 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.Rect
 import android.util.AttributeSet
 import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewGroup
 import android.widget.OverScroller
 import androidx.core.graphics.withSave
+import com.pdfreader.core.PdfDocument
 import kotlinx.coroutines.*
 import kotlin.math.roundToInt
 
@@ -21,7 +25,11 @@ class PdfVerticalView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
 ) : ViewGroup(context, attrs) {
 
-    interface Listener { fun onPageVisible(page: Int); fun onPageTap() }
+    interface Listener {
+        fun onPageVisible(page: Int)
+        fun onPageTap()
+        fun onSelectionFinished(page: Int, quads: FloatArray, text: String)
+    }
 
     var listener: Listener? = null
     var pageCount: Int = 0
@@ -31,8 +39,12 @@ class PdfVerticalView @JvmOverloads constructor(
 
     var renderPage: (suspend (Int, Int, Int, Float, Bitmap?) -> Bitmap?)? = null
     var getPageSize: ((Int) -> Pair<Float, Float>?)? = null
+    var getSelectionQuads: (suspend (Int, Float, Float, Float, Float, Int) -> FloatArray?)? = null
+    var copySelectionText: (suspend (Int, Float, Float, Float, Float, Int) -> String)? = null
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val selectionPath = Path()
     private val holders = mutableMapOf<Int, PageHolder>()
     private val renderJobs = mutableMapOf<Int, Job>()
     private val renderJobTargets = mutableMapOf<Int, Pair<Int, Int>>()
@@ -53,6 +65,21 @@ class PdfVerticalView @JvmOverloads constructor(
     private var zoomFactor = 1.0f
     private var panX = 0f
     private var pinchInProgress = false
+
+    private var selectionActive = false
+    private var selectionPage = -1
+    private val selectionStart = PointF()
+    private val selectionEnd = PointF()
+    private var selectionQuads: FloatArray? = null
+    private var selectionJob: Job? = null
+    private val selectionMode = PdfDocument.SELECT_WORDS
+
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(220, 247, 122, 12) // orange_500
+        style = Paint.Style.FILL
+    }
+    private val handleRadius = 10f // dp, converted in init
+    private var handleRadiusPx = 0f
 
     // Track last visible range to avoid evicting every frame
     private var lastEvictFirst = -1
@@ -89,6 +116,9 @@ class PdfVerticalView @JvmOverloads constructor(
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
             pinchInProgress = true
+            if (selectionActive || selectionQuads != null) {
+                clearSelection()
+            }
             return true
         }
 
@@ -137,6 +167,10 @@ class PdfVerticalView @JvmOverloads constructor(
         override fun onDown(e: MotionEvent) = true
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
             parent.requestDisallowInterceptTouchEvent(true)
+            if (selectionActive) {
+                updateSelection(e2.x, e2.y)
+                return true
+            }
             if (isZoomed()) {
                 panX -= dx
                 clampPanX()
@@ -147,10 +181,26 @@ class PdfVerticalView @JvmOverloads constructor(
             scroller.fling(0, scrollY, 0, -vy.toInt(), 0, 0, 0, maxScrollY)
             postInvalidateOnAnimation(); return true
         }
-        override fun onSingleTapConfirmed(e: MotionEvent): Boolean { listener?.onPageTap(); return true }
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            if (selectionQuads != null) {
+                clearSelection()
+                return true
+            }
+            listener?.onPageTap()
+            return true
+        }
+
+        override fun onLongPress(e: MotionEvent) {
+            startSelection(e.x, e.y)
+        }
     })
 
-    init { setWillNotDraw(false); setBackgroundColor(pageBackgroundColor) }
+    init {
+        setWillNotDraw(false)
+        setBackgroundColor(pageBackgroundColor)
+        selectionPaint.style = Paint.Style.FILL
+        handleRadiusPx = handleRadius * resources.displayMetrics.density
+    }
 
     override fun onMeasure(wSpec: Int, hSpec: Int) =
         setMeasuredDimension(MeasureSpec.getSize(wSpec), MeasureSpec.getSize(hSpec))
@@ -201,6 +251,7 @@ class PdfVerticalView @JvmOverloads constructor(
         if (width <= 0 || height <= 0 || pageOffsets.isEmpty()) return
         val vw = width; val vh = height; val sy = scrollY
         val zoom = (if (maxPageWidth > 0) vw.toFloat() / maxPageWidth else 1.0f) * zoomFactor
+        updateSelectionPaint()
         var firstVis = -1; var lastVis = -1
         val start = findFirst(sy)
         for (i in start until pageCount) {
@@ -213,6 +264,7 @@ class PdfVerticalView @JvmOverloads constructor(
                 val pw = if (size != null) (size.first * zoom).toInt().coerceAtLeast(1) else pageWidths.getOrNull(i)?.coerceAtLeast(1) ?: vw
                 val px = ((vw - pw) / 2f + panX).roundToInt()
                 drawPage(canvas, i, px, pageTop, pw, ph)
+                drawSelectionOverlay(canvas, i, px, pageTop, zoom)
             }
         }
         if (firstVis >= 0) {
@@ -275,6 +327,193 @@ class PdfVerticalView @JvmOverloads constructor(
         if (!pinchInProgress && (holder.needsRerender || bmp == null)) {
             requestRender(page, w, h)
         }
+    }
+
+    private fun updateSelectionPaint() {
+        selectionPaint.color = if (isDarkTheme) Color.argb(120, 255, 214, 102) else Color.argb(90, 255, 214, 102)
+    }
+
+    private fun drawSelectionOverlay(canvas: Canvas, page: Int, pageX: Int, pageY: Int, zoom: Float) {
+        val quads = selectionQuads ?: return
+        if (selectionPage != page) return
+        if (zoom <= 0f) return
+        val baseX = pageX.toFloat()
+        val baseY = pageY.toFloat()
+        val count = quads.size / 8
+        var firstLeft = Float.MAX_VALUE
+        var firstTop = Float.MAX_VALUE
+        var lastRight = Float.MIN_VALUE
+        var lastBottom = Float.MIN_VALUE
+        for (i in 0 until count) {
+            val o = i * 8
+            val ulx = baseX + quads[o + 0] * zoom
+            val uly = baseY + quads[o + 1] * zoom
+            val urx = baseX + quads[o + 2] * zoom
+            val ury = baseY + quads[o + 3] * zoom
+            val llx = baseX + quads[o + 4] * zoom
+            val lly = baseY + quads[o + 5] * zoom
+            val lrx = baseX + quads[o + 6] * zoom
+            val lry = baseY + quads[o + 7] * zoom
+
+            selectionPath.reset()
+            selectionPath.moveTo(ulx, uly)
+            selectionPath.lineTo(urx, ury)
+            selectionPath.lineTo(lrx, lry)
+            selectionPath.lineTo(llx, lly)
+            selectionPath.close()
+            canvas.drawPath(selectionPath, selectionPaint)
+
+            if (i == 0) { firstLeft = ulx; firstTop = uly }
+            if (i == count - 1) { lastRight = lrx; lastBottom = lry }
+        }
+        // Draw handles
+        if (count > 0) {
+            canvas.drawCircle(firstLeft, firstTop - handleRadiusPx, handleRadiusPx, handlePaint)
+            canvas.drawCircle(lastRight, lastBottom + handleRadiusPx, handleRadiusPx, handlePaint)
+        }
+    }
+
+    private data class PagePoint(val page: Int, val x: Float, val y: Float)
+
+    private fun startSelection(x: Float, y: Float) {
+        if (pinchInProgress || scaleDetector.isInProgress) return
+        if (getSelectionQuads == null) return
+        if (selectionActive || selectionQuads != null) clearSelection()
+        val point = mapViewPointToPage(x, y) ?: return
+        selectionActive = true
+        selectionPage = point.page
+        selectionStart.set(point.x, point.y)
+        selectionEnd.set(point.x, point.y)
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        updateSelectionQuads()
+        invalidate()
+    }
+
+    private fun updateSelection(x: Float, y: Float) {
+        if (!selectionActive) return
+        val point = mapViewPointToPage(x, y) ?: return
+        if (point.page != selectionPage) return
+        selectionEnd.set(point.x, point.y)
+        updateSelectionQuads()
+    }
+
+    private fun updateSelectionQuads() {
+        val page = selectionPage
+        if (page < 0) return
+        val fetch = getSelectionQuads ?: return
+        val start = PointF(selectionStart.x, selectionStart.y)
+        val end = PointF(selectionEnd.x, selectionEnd.y)
+        selectionJob?.cancel()
+        selectionJob = scope.launch {
+            val quads = fetch(page, start.x, start.y, end.x, end.y, selectionMode)
+            selectionQuads = quads?.takeIf { it.isNotEmpty() }
+            invalidate()
+        }
+    }
+
+    private fun finishSelection() {
+        val page = selectionPage
+        if (page < 0) {
+            clearSelection()
+            return
+        }
+        val fetch = getSelectionQuads
+        if (fetch == null) {
+            clearSelection()
+            return
+        }
+        val start = PointF(selectionStart.x, selectionStart.y)
+        val end = PointF(selectionEnd.x, selectionEnd.y)
+        selectionActive = false
+        selectionJob?.cancel()
+        selectionJob = scope.launch {
+            val quads = fetch(page, start.x, start.y, end.x, end.y, selectionMode)
+            if (quads == null || quads.isEmpty()) {
+                clearSelection()
+                return@launch
+            }
+            selectionQuads = quads
+            val text = copySelectionText?.invoke(page, start.x, start.y, end.x, end.y, selectionMode) ?: ""
+            listener?.onSelectionFinished(page, quads, text)
+            invalidate()
+        }
+    }
+
+    fun clearSelection() {
+        selectionActive = false
+        selectionPage = -1
+        selectionQuads = null
+        selectionJob?.cancel()
+        invalidate()
+    }
+
+    /**
+     * Returns the screen-space bounding rect of the current selection for toolbar positioning.
+     * Returns null if no selection is active.
+     */
+    fun getSelectionScreenBounds(): android.graphics.RectF? {
+        val quads = selectionQuads ?: return null
+        val page = selectionPage
+        if (page < 0 || quads.isEmpty() || pageOffsets.isEmpty()) return null
+        val zoom = (if (maxPageWidth > 0) width.toFloat() / maxPageWidth else 1.0f) * zoomFactor
+        if (zoom <= 0f) return null
+        val size = getPageSize?.invoke(page) ?: return null
+        val pw = size.first * zoom
+        val pageX = (width - pw) / 2f + panX
+        val pageY = pageOffsets[page].toFloat()
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
+        val count = quads.size / 8
+        for (i in 0 until count) {
+            val o = i * 8
+            for (j in 0 until 4) {
+                val sx = pageX + quads[o + j * 2] * zoom
+                val sy = pageY + quads[o + j * 2 + 1] * zoom - scrollY
+                if (sx < minX) minX = sx; if (sx > maxX) maxX = sx
+                if (sy < minY) minY = sy; if (sy > maxY) maxY = sy
+            }
+        }
+        return android.graphics.RectF(minX, minY, maxX, maxY)
+    }
+
+    fun invalidatePage(page: Int) {
+        holders[page]?.needsRerender = true
+        invalidate()
+    }
+
+    private fun mapViewPointToPage(x: Float, y: Float): PagePoint? {
+        if (pageOffsets.isEmpty() || width <= 0) return null
+        val contentX = x + scrollX
+        val contentY = y + scrollY
+        val page = findPageAt(contentY.toInt())
+        if (page < 0) return null
+        val size = getPageSize?.invoke(page) ?: return null
+        val zoom = (if (maxPageWidth > 0) width.toFloat() / maxPageWidth else 1.0f) * zoomFactor
+        if (zoom <= 0f) return null
+        val pw = size.first * zoom
+        val ph = size.second * zoom
+        val pageX = (width - pw) / 2f + panX
+        val pageY = pageOffsets[page].toFloat()
+        if (contentX < pageX || contentX > pageX + pw || contentY < pageY || contentY > pageY + ph) return null
+        val localX = contentX - pageX
+        val localY = contentY - pageY
+        return PagePoint(page, localX / zoom, localY / zoom)
+    }
+
+    private fun findPageAt(y: Int): Int {
+        var lo = 0
+        var hi = pageCount - 1
+        while (lo <= hi) {
+            val m = (lo + hi) / 2
+            val top = pageOffsets[m]
+            val bottom = top + pageHeights[m]
+            when {
+                y < top -> hi = m - 1
+                y >= bottom -> lo = m + 1
+                else -> return m
+            }
+        }
+        return -1
     }
 
     private fun requestRender(page: Int, w: Int, h: Int) {
@@ -362,6 +601,22 @@ class PdfVerticalView @JvmOverloads constructor(
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.action == MotionEvent.ACTION_DOWN) scroller.forceFinished(true)
+
+        // When selection is active, handle MOVE directly — GestureDetector
+        // does NOT forward onScroll events after onLongPress.
+        if (selectionActive) {
+            when (e.action) {
+                MotionEvent.ACTION_MOVE -> {
+                    updateSelection(e.x, e.y)
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    finishSelection()
+                    return true
+                }
+            }
+        }
+
         val scaleHandled = scaleDetector.onTouchEvent(e)
         val gestureHandled = if (!scaleDetector.isInProgress) detector.onTouchEvent(e) else true
         return scaleHandled || gestureHandled || super.onTouchEvent(e)
@@ -377,7 +632,11 @@ class PdfVerticalView @JvmOverloads constructor(
         while (lo < hi) { val m = (lo + hi) / 2; if (pageOffsets[m] + pageHeights[m] <= sy) lo = m + 1 else hi = m }; return lo
     }
 
-    fun cleanup() { scope.cancel(); recycleAll() }
+    fun cleanup() {
+        clearSelection()
+        scope.cancel()
+        recycleAll()
+    }
 
     private class PageHolder(var w: Int, var h: Int) {
         var bitmap: Bitmap? = null

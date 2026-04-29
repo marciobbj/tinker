@@ -33,9 +33,18 @@
         <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
 
         <ImageButton
+            android:id="@+id/btnAnnotations"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_annotations"
+            android:contentDescription="@string/annotations_button" />
+
+        <ImageButton
             android:id="@+id/btnDark"
             android:layout_width="40dp"
             android:layout_height="40dp"
+            android:layout_marginStart="8dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:src="@drawable/ic_dark"
             android:contentDescription="@string/toggle_dark" />

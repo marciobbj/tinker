@@ -6,14 +6,18 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.Rect
 import android.util.AttributeSet
 import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.OverScroller
 import androidx.core.graphics.withSave
+import com.pdfreader.core.PdfDocument
 import kotlinx.coroutines.*
 import kotlin.math.roundToInt
 
@@ -21,7 +25,11 @@ class PdfBookView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
 ) : View(context, attrs) {
 
-    interface Listener { fun onPageChanged(page: Int); fun onPageTap() }
+    interface Listener {
+        fun onPageChanged(page: Int)
+        fun onPageTap()
+        fun onSelectionFinished(page: Int, quads: FloatArray, text: String)
+    }
 
     var listener: Listener? = null
     var pageCount: Int = 0
@@ -30,9 +38,15 @@ class PdfBookView @JvmOverloads constructor(
 
     var renderPage: (suspend (Int, Int, Int, Float, Bitmap?) -> Bitmap?)? = null
     var getPageSize: ((Int) -> Pair<Float, Float>?)? = null
+    var getPageSizeAsync: (suspend (Int) -> Pair<Float, Float>?)? = null
+    var getSelectionQuads: (suspend (Int, Float, Float, Float, Float, Int) -> FloatArray?)? = null
+    var copySelectionText: (suspend (Int, Float, Float, Float, Float, Int) -> String)? = null
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val selectionPath = Path()
     private val holders = mutableMapOf<Int, PageHolder>()
+    private val pageSizeOverrides = mutableMapOf<Int, Pair<Float, Float>>()
     private val renderJobs = mutableMapOf<Int, Job>()
     private val renderJobTargets = mutableMapOf<Int, Pair<Int, Int>>()
     private val renderJobTokens = mutableMapOf<Int, Int>()
@@ -51,6 +65,21 @@ class PdfBookView @JvmOverloads constructor(
     private var panX = 0f
     private var panY = 0f
     private var pinchInProgress = false
+
+    private var selectionActive = false
+    private var selectionPage = -1
+    private val selectionStart = PointF()
+    private val selectionEnd = PointF()
+    private var selectionQuads: FloatArray? = null
+    private var selectionJob: Job? = null
+    private val selectionMode = PdfDocument.SELECT_WORDS
+
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(220, 247, 122, 12)
+        style = Paint.Style.FILL
+    }
+    private val handleRadius = 10f
+    private var handleRadiusPx = 0f
 
     // ── Crossfade state ──
     // When transitioning pages, we fade out the old page and fade in the new one.
@@ -75,6 +104,9 @@ class PdfBookView @JvmOverloads constructor(
             pinchInProgress = true
             scroller.forceFinished(true)
             animating = false
+            if (selectionActive || selectionQuads != null) {
+                clearSelection()
+            }
             return true
         }
 
@@ -114,6 +146,10 @@ class PdfBookView @JvmOverloads constructor(
         override fun onDown(e: MotionEvent): Boolean { scroller.forceFinished(true); animating = false; return true }
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
             parent.requestDisallowInterceptTouchEvent(true)
+            if (selectionActive) {
+                updateSelection(e2.x, e2.y)
+                return true
+            }
             if (isZoomed()) {
                 panX -= dx
                 panY -= dy
@@ -130,6 +166,10 @@ class PdfBookView @JvmOverloads constructor(
             animateTo(t.coerceIn(0, pageCount - 1)); return true
         }
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            if (selectionQuads != null) {
+                clearSelection()
+                return true
+            }
             if (isZoomed()) {
                 listener?.onPageTap()
                 return true
@@ -138,12 +178,16 @@ class PdfBookView @JvmOverloads constructor(
             when { x < width * 0.25f -> goToPage(currentPage - 1); x > width * 0.75f -> goToPage(currentPage + 1); else -> listener?.onPageTap() }
             return true
         }
+
+        override fun onLongPress(e: MotionEvent) {
+            startSelection(e.x, e.y)
+        }
     })
 
     init {
-        // Solid background prevents the root layout's black from bleeding through
-        // in any edge cases (overshoot, sub-pixel gaps, etc.)
         setBackgroundColor(pageBackgroundColor)
+        selectionPaint.style = Paint.Style.FILL
+        handleRadiusPx = handleRadius * resources.displayMetrics.density
     }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
@@ -154,7 +198,10 @@ class PdfBookView @JvmOverloads constructor(
         panX = 0f
         panY = 0f
         recycleAll()
-        if (w > 0 && h > 0) prefetch(currentPage)
+        if (w > 0 && h > 0) {
+            prefetch(currentPage)
+            requestPageSize(currentPage)
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -179,6 +226,7 @@ class PdfBookView @JvmOverloads constructor(
 
         val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
         val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
+        updateSelectionPaint()
 
         // ── Crossfade: draw old page underneath if active ──
         if (crossfadeInProgress && crossfadeOldBitmap != null && !crossfadeOldBitmap!!.isRecycled) {
@@ -213,12 +261,14 @@ class PdfBookView @JvmOverloads constructor(
             val x = ((vw - renderW) / 2f + panX).roundToInt()
             val y = ((vh - renderH) / 2f + panY).roundToInt()
             drawPage(canvas, currentPage, x, y, renderW, renderH, drawAlpha)
+            drawSelectionOverlay(canvas, currentPage, x, y, renderW, renderH)
         } else {
             val ox = offsetX.toInt()
             // Always draw all adjacent pages during scroll to guarantee full
             // pixel coverage — prevents any background from bleeding through.
             if (currentPage > 0) drawPage(canvas, currentPage - 1, -vw + ox, 0, vw, vh, drawAlpha)
             drawPage(canvas, currentPage, ox, 0, vw, vh, drawAlpha)
+            drawSelectionOverlay(canvas, currentPage, ox, 0, renderW, renderH)
             if (currentPage < pageCount - 1) drawPage(canvas, currentPage + 1, vw + ox, 0, vw, vh, drawAlpha)
         }
     }
@@ -295,6 +345,209 @@ class PdfBookView @JvmOverloads constructor(
         if (!pinchInProgress && (holder.needsRerender || bmp == null)) {
             requestRender(page, w, h)
         }
+    }
+
+    private fun updateSelectionPaint() {
+        selectionPaint.color = if (isDarkTheme) Color.argb(120, 255, 214, 102) else Color.argb(90, 255, 214, 102)
+    }
+
+    private fun drawSelectionOverlay(canvas: Canvas, page: Int, pageX: Int, pageY: Int, renderW: Int, renderH: Int) {
+        val quads = selectionQuads ?: return
+        if (selectionPage != page) return
+        val size = getPageSize?.invoke(page) ?: pageSizeOverrides[page] ?: return
+
+        val scale = minOf(renderW / size.first, renderH / size.second)
+        if (scale <= 0f) return
+        val drawnW = size.first * scale
+        val drawnH = size.second * scale
+        val padX = (renderW - drawnW) / 2f
+        val padY = (renderH - drawnH) / 2f
+
+        val baseX = pageX.toFloat() + padX
+        val baseY = pageY.toFloat() + padY
+        val count = quads.size / 8
+        var firstLeft = Float.MAX_VALUE
+        var firstTop = Float.MAX_VALUE
+        var lastRight = Float.MIN_VALUE
+        var lastBottom = Float.MIN_VALUE
+        for (i in 0 until count) {
+            val o = i * 8
+            val ulx = baseX + quads[o + 0] * scale
+            val uly = baseY + quads[o + 1] * scale
+            val urx = baseX + quads[o + 2] * scale
+            val ury = baseY + quads[o + 3] * scale
+            val llx = baseX + quads[o + 4] * scale
+            val lly = baseY + quads[o + 5] * scale
+            val lrx = baseX + quads[o + 6] * scale
+            val lry = baseY + quads[o + 7] * scale
+
+            selectionPath.reset()
+            selectionPath.moveTo(ulx, uly)
+            selectionPath.lineTo(urx, ury)
+            selectionPath.lineTo(lrx, lry)
+            selectionPath.lineTo(llx, lly)
+            selectionPath.close()
+            canvas.drawPath(selectionPath, selectionPaint)
+
+            if (i == 0) { firstLeft = ulx; firstTop = uly }
+            if (i == count - 1) { lastRight = lrx; lastBottom = lry }
+        }
+        if (count > 0) {
+            canvas.drawCircle(firstLeft, firstTop - handleRadiusPx, handleRadiusPx, handlePaint)
+            canvas.drawCircle(lastRight, lastBottom + handleRadiusPx, handleRadiusPx, handlePaint)
+        }
+    }
+
+    private data class PagePoint(val page: Int, val x: Float, val y: Float)
+
+    private fun startSelection(x: Float, y: Float) {
+        if (pinchInProgress || scaleDetector.isInProgress) return
+        if (getSelectionQuads == null) return
+        if (selectionActive || selectionQuads != null) clearSelection()
+        val point = mapViewPointToPage(x, y) ?: return
+        selectionActive = true
+        selectionPage = point.page
+        selectionStart.set(point.x, point.y)
+        selectionEnd.set(point.x, point.y)
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        updateSelectionQuads()
+        invalidate()
+    }
+
+    private fun updateSelection(x: Float, y: Float) {
+        if (!selectionActive) return
+        val point = mapViewPointToPage(x, y) ?: return
+        if (point.page != selectionPage) return
+        selectionEnd.set(point.x, point.y)
+        updateSelectionQuads()
+    }
+
+    private fun updateSelectionQuads() {
+        val page = selectionPage
+        if (page < 0) return
+        val fetch = getSelectionQuads ?: return
+        val start = PointF(selectionStart.x, selectionStart.y)
+        val end = PointF(selectionEnd.x, selectionEnd.y)
+        selectionJob?.cancel()
+        selectionJob = scope.launch {
+            val quads = fetch(page, start.x, start.y, end.x, end.y, selectionMode)
+            selectionQuads = quads?.takeIf { it.isNotEmpty() }
+            invalidate()
+        }
+    }
+
+    private fun finishSelection() {
+        val page = selectionPage
+        if (page < 0) {
+            clearSelection()
+            return
+        }
+        val fetch = getSelectionQuads
+        if (fetch == null) {
+            clearSelection()
+            return
+        }
+        val start = PointF(selectionStart.x, selectionStart.y)
+        val end = PointF(selectionEnd.x, selectionEnd.y)
+        selectionActive = false
+        selectionJob?.cancel()
+        selectionJob = scope.launch {
+            val quads = fetch(page, start.x, start.y, end.x, end.y, selectionMode)
+            if (quads == null || quads.isEmpty()) {
+                clearSelection()
+                return@launch
+            }
+            selectionQuads = quads
+            val text = copySelectionText?.invoke(page, start.x, start.y, end.x, end.y, selectionMode) ?: ""
+            listener?.onSelectionFinished(page, quads, text)
+            invalidate()
+        }
+    }
+
+    fun clearSelection() {
+        selectionActive = false
+        selectionPage = -1
+        selectionQuads = null
+        selectionJob?.cancel()
+        invalidate()
+    }
+
+    fun getSelectionScreenBounds(): android.graphics.RectF? {
+        val quads = selectionQuads ?: return null
+        val page = selectionPage
+        if (page < 0 || quads.isEmpty() || vw <= 0 || vh <= 0) return null
+        val size = getPageSize?.invoke(page) ?: pageSizeOverrides[page] ?: return null
+        val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
+        val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
+        val scale = minOf(renderW / size.first, renderH / size.second)
+        if (scale <= 0f) return null
+        val drawnW = size.first * scale
+        val drawnH = size.second * scale
+        val padX = (renderW - drawnW) / 2f
+        val padY = (renderH - drawnH) / 2f
+        val pageX = if (isZoomed()) ((vw - renderW) / 2f + panX) else offsetX
+        val pageY = if (isZoomed()) ((vh - renderH) / 2f + panY) else 0f
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
+        val count = quads.size / 8
+        for (i in 0 until count) {
+            val o = i * 8
+            for (j in 0 until 4) {
+                val sx = pageX + padX + quads[o + j * 2] * scale
+                val sy = pageY + padY + quads[o + j * 2 + 1] * scale
+                if (sx < minX) minX = sx; if (sx > maxX) maxX = sx
+                if (sy < minY) minY = sy; if (sy > maxY) maxY = sy
+            }
+        }
+        return android.graphics.RectF(minX, minY, maxX, maxY)
+    }
+
+    fun invalidatePage(page: Int) {
+        holders[page]?.needsRerender = true
+        invalidate()
+    }
+
+    private fun requestPageSize(page: Int) {
+        if (pageSizeOverrides.containsKey(page)) return
+        val fetch = getPageSizeAsync ?: return
+        scope.launch {
+            val size = fetch(page)
+            if (size != null) {
+                pageSizeOverrides[page] = size
+                invalidate()
+            }
+        }
+    }
+
+    private fun mapViewPointToPage(x: Float, y: Float): PagePoint? {
+        if (vw <= 0 || vh <= 0 || pageCount <= 0) return null
+        val page = currentPage
+        val size = getPageSize?.invoke(page) ?: pageSizeOverrides[page] ?: run {
+            requestPageSize(page)
+            return null
+        }
+
+        val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
+        val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
+        val scale = minOf(renderW / size.first, renderH / size.second)
+        if (scale <= 0f) return null
+        val drawnW = size.first * scale
+        val drawnH = size.second * scale
+        val padX = (renderW - drawnW) / 2f
+        val padY = (renderH - drawnH) / 2f
+
+        val pageX = if (isZoomed()) ((vw - renderW) / 2f + panX) else offsetX
+        val pageY = if (isZoomed()) ((vh - renderH) / 2f + panY) else 0f
+
+        if (!isZoomed() && kotlin.math.abs(offsetX) > 1f) return null
+
+        val localX = x - pageX
+        val localY = y - pageY
+        if (localX < padX || localX > padX + drawnW || localY < padY || localY > padY + drawnH) return null
+
+        val pageXPt = (localX - padX) / scale
+        val pageYPt = (localY - padY) / scale
+        return PagePoint(page, pageXPt, pageYPt)
     }
 
     /**
@@ -437,7 +690,9 @@ class PdfBookView @JvmOverloads constructor(
         offsetX = 0f; listener?.onPageChanged(currentPage)
         // prefetch calls evict() which may recycle the old page holder,
         // but that's fine — crossfade already copied the bitmap above.
-        prefetch(currentPage); invalidate()
+        prefetch(currentPage)
+        requestPageSize(currentPage)
+        invalidate()
     }
 
     /**
@@ -470,6 +725,21 @@ class PdfBookView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        // When selection is active, handle MOVE directly — GestureDetector
+        // does NOT forward onScroll events after onLongPress.
+        if (selectionActive) {
+            when (e.action) {
+                MotionEvent.ACTION_MOVE -> {
+                    updateSelection(e.x, e.y)
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    finishSelection()
+                    return true
+                }
+            }
+        }
+
         val scaleHandled = scaleDetector.onTouchEvent(e)
         val handled = if (!scaleDetector.isInProgress) detector.onTouchEvent(e) else true
         if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
@@ -507,14 +777,17 @@ class PdfBookView @JvmOverloads constructor(
         recycleAll()
         listener?.onPageChanged(currentPage)
         prefetch(currentPage)
+        requestPageSize(currentPage)
         invalidate()
     }
 
     fun cleanup() {
+        clearSelection()
         scope.cancel()
         recycleAll()
         recycleBitmap(crossfadeOldBitmap)
         crossfadeOldBitmap = null
+        pageSizeOverrides.clear()
     }
 
     private class PageHolder(var w: Int, var h: Int) {
