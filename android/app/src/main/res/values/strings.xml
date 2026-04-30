@@ -22,4 +22,8 @@
     <string name="page_indicator_default">Page 1 / 1</string>
     <string name="page_indicator_format">Page %1$d / %2$d</string>
     <string name="bookmark_saved">Position saved successfully!</string>
+
+    <string name="remove_recent_title">Remove from recents</string>
+    <string name="remove_recent_message">Remove "%1$s" from your recent documents list?</string>
+    <string name="remove_recent_confirm">Remove</string>
 </resources>

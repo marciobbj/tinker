@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.DividerItemDecoration
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -118,6 +119,28 @@ class MainActivity : AppCompatActivity() {
             holder.subtitle.text = getString(R.string.page_mode_format, bm.pageNumber + 1, modeStr)
             holder.itemView.setOnClickListener {
                 openReader(Uri.parse(bm.uri))
+            }
+
+            holder.itemView.setOnLongClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle(R.string.remove_recent_title)
+                    .setMessage(getString(R.string.remove_recent_message, displayTitle))
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(R.string.remove_recent_confirm) { _, _ ->
+                        // Best-effort: drop persisted permission so the import can be fully discarded.
+                        try {
+                            contentResolver.releasePersistableUriPermission(
+                                Uri.parse(bm.uri),
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        } catch (_: Exception) {
+                        }
+
+                        bookmarkStore.remove(bm.uri)
+                        refreshList()
+                    }
+                    .show()
+                true
             }
         }
     }
