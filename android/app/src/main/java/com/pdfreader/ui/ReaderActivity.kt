@@ -329,26 +329,27 @@ class ReaderActivity : AppCompatActivity() {
         pageIndicator.text = getString(R.string.page_indicator_format, cp + 1, pc)
     }
 
-    private fun saveBookmark(pageOverride: Int? = null) {
-        if (!documentReady) return
-        val uri = intent.data?.toString() ?: return
-        try {
-            val currentPage = (pageOverride ?: when (currentMode) {
-                SettingsStore.DISPLAY_MODE_BOOK -> bookView?.currentPage ?: 0
-                else -> verticalView?.getCurrentPage() ?: 0
-            }).coerceAtLeast(0)
-            val bm = BookmarkStore.Bookmark(
-                uri = uri,
-                title = documentTitle,
-                pageNumber = currentPage,
-                scrollY = 0f,
-                displayMode = currentMode
-            )
-            bookmarkStore.save(bm)
-        } catch (_: Exception) {
-            // Prevent crash in edge cases
-        }
-    }
+private fun saveBookmark(pageOverride: Int? = null) {
+if (!documentReady) return
+val uri = intent.data?.toString() ?: return
+try {
+val currentPage = (pageOverride ?: when (currentMode) {
+SettingsStore.DISPLAY_MODE_BOOK -> bookView?.currentPage ?: 0
+else -> verticalView?.getCurrentPage() ?: 0
+}).coerceAtLeast(0)
+val bm = BookmarkStore.Bookmark(
+uri = uri,
+title = documentTitle,
+pageNumber = currentPage,
+scrollY = 0f,
+displayMode = currentMode,
+totalPages = pdfDocument?.pageCount ?: 1
+)
+bookmarkStore.save(bm)
+} catch (_: Exception) {
+// Prevent crash in edge cases
+}
+}
 
     override fun onPause() {
         super.onPause()

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+<string name="app_name">Tinker</string>
+<string name="home_title">Tinker</string>
+<string name="home_subtitle">Documentos recentes</string>
+<string name="open_pdf">Abrir PDF</string>
+<string name="no_recent">Nenhum arquivo PDF recente.\nToque em + para abrir um.</string>
+<string name="empty_recent">Nenhum documento recente.\nToque no botão + para abrir um PDF.</string>
+<string name="back">Voltar</string>
+<string name="toggle_dark">Alternar modo escuro</string>
+<string name="bookmark">Salvar posição</string>
+<string name="previous">Página anterior</string>
+<string name="next">Próxima página</string>
+<string name="switch_mode">Mudar modo de leitura</string>
+<string name="go_to_page">Ir para página</string>
+<string name="go_to_page_title">Ir para página</string>
+<string name="go_to_page_hint">Digite um número entre 1 e %1$d</string>
+<string name="go_to_page_confirm">Ir</string>
+<string name="go_to_page_invalid">Número de página inválido</string>
+<string name="mode_book">Livro</string>
+<string name="mode_vertical">Vertical</string>
+<string name="page_mode_format">Página %1$d · %2$s</string>
+<string name="progress_format">%1$d%% read</string>
+<string name="page_indicator_default">Página 1 / 1</string>
+<string name="page_indicator_format">Página %1$d / %2$d</string>
+<string name="bookmark_saved">Posição salva com sucesso!</string>
+<string name="remove_recent_title">Remover dos recentes</string>
+<string name="remove_recent_message">Remover "%1$s" da sua lista de documentos recentes?</string>
+<string name="remove_recent_confirm">Remover</string>
+</resources>
