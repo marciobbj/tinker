@@ -88,11 +88,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     inner class RecentAdapter : RecyclerView.Adapter<RecentAdapter.VH>() {
-inner class VH(itemView: View) : RecyclerView.ViewHolder(itemView) {
-val title: TextView = itemView.findViewById(R.id.itemTitle)
-val subtitle: TextView = itemView.findViewById(R.id.itemSubtitle)
-val progress: TextView = itemView.findViewById(R.id.itemProgress)
-}
+    inner class VH(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val title: TextView = itemView.findViewById(R.id.itemTitle)
+        val subtitle: TextView = itemView.findViewById(R.id.itemSubtitle)
+        val progress: TextView = itemView.findViewById(R.id.itemProgress)
+    }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
             val v = LayoutInflater.from(parent.context).inflate(R.layout.item_recent, parent, false)
@@ -111,18 +111,18 @@ val progress: TextView = itemView.findViewById(R.id.itemProgress)
                     decoded.substringAfterLast("/").removeSuffix(".pdf").ifBlank { "PDF" }
                 } catch (_: Exception) { "PDF" }
             }
-holder.title.text = displayTitle
-val modeStr = if (bm.displayMode == SettingsStore.DISPLAY_MODE_BOOK) {
-getString(R.string.mode_book)
-} else {
-getString(R.string.mode_vertical)
-}
-holder.subtitle.text = getString(R.string.page_mode_format, bm.pageNumber + 1, modeStr)
-val progressPercent = if (bm.totalPages > 0) {
-((bm.pageNumber + 1).toFloat() / bm.totalPages * 100).toInt()
-} else 0
-holder.progress.text = getString(R.string.progress_format, progressPercent)
-            holder.itemView.setOnClickListener {
+            holder.title.text = displayTitle
+            val modeStr = if (bm.displayMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                getString(R.string.mode_book)
+            } else {
+                getString(R.string.mode_vertical)
+            }
+            holder.subtitle.text = getString(R.string.page_mode_format, bm.pageNumber + 1, modeStr)
+            val progressPercent = if (bm.totalPages > 0) {
+                ((bm.pageNumber + 1).toFloat() / bm.totalPages * 100).toInt()
+            } else 0
+                holder.progress.text = getString(R.string.progress_format, progressPercent)
+                holder.itemView.setOnClickListener {
                 openReader(Uri.parse(bm.uri))
             }
 
