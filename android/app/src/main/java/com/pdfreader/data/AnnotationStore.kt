@@ -71,7 +71,7 @@ class AnnotationStore(context: Context) {
                 put("timestamp", entry.timestamp)
             })
         }
-        prefs.edit().putString(keyFor(uri), arr.toString()).apply()
+        prefs.edit().putString(keyFor(uri), arr.toString()).commit()
     }
 
     private fun keyFor(uri: String): String = KEY_PREFIX + Uri.encode(uri)
