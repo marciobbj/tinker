@@ -5,17 +5,19 @@
     android:layout_height="wrap_content"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:paddingHorizontal="20dp"
-    android:paddingVertical="12dp"
-    android:background="?attr/selectableItemBackground"
+    android:layout_marginHorizontal="16dp"
+    android:layout_marginVertical="6dp"
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="14dp"
+    android:background="@drawable/bg_annotation_item"
     android:clickable="true"
     android:focusable="true">
 
     <!-- Highlight color indicator -->
     <View
         android:id="@+id/colorDot"
-        android:layout_width="10dp"
-        android:layout_height="10dp"
+        android:layout_width="12dp"
+        android:layout_height="12dp"
         android:background="@drawable/bg_color_dot" />
 
     <LinearLayout
@@ -23,7 +25,7 @@
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:orientation="vertical"
-        android:layout_marginStart="14dp">
+        android:layout_marginStart="12dp">
 
         <TextView
             android:id="@+id/annotPage"
@@ -37,19 +39,11 @@
             android:id="@+id/annotText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
+            android:layout_marginTop="3dp"
             android:textColor="?attr/colorOnSurface"
             android:textSize="14sp"
             android:maxLines="2"
             android:ellipsize="end" />
     </LinearLayout>
-
-<ImageView
-          android:id="@+id/deleteBtn"
-          android:layout_width="16dp"
-          android:layout_height="16dp"
-          android:src="@android:drawable/ic_menu_delete"
-          android:alpha="0.6"
-          android:contentDescription="Delete highlight" />
 
 </LinearLayout>

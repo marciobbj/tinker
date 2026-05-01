@@ -6,4 +6,5 @@
     <color name="orange_700">#C55E00</color>
     <color name="orange_900">#7A3900</color>
     <color name="highlight_color">#FFE082</color>
+    <color name="swipe_delete_red">#D32F2F</color>
 </resources>

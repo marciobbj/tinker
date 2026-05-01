@@ -10,6 +10,7 @@ import android.view.View
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import androidx.core.content.ContextCompat
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -21,9 +22,11 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.pdfreader.R
 import com.pdfreader.core.PdfDocument
 import com.pdfreader.data.AnnotationStore
@@ -505,39 +508,16 @@ class ReaderActivity : AppCompatActivity() {
         val annotations = annotationStore.loadAnnotations(uri)
         if (annotations.isNotEmpty()) {
             highlightsHeader.visibility = View.VISIBLE
+            val adapter = AnnotationAdapter(
+                annotations.toMutableList(),
+                { entry ->
+                    applyPageToCurrentView(entry.page)
+                    dialog.dismiss()
+                }
+            )
             highlightsList.layoutManager = LinearLayoutManager(this)
-highlightsList.adapter = AnnotationAdapter(
-                        annotations.toMutableList(),
-                        { entry ->
-                            applyPageToCurrentView(entry.page)
-                            dialog.dismiss()
-                        },
-                        { index, entry ->
-                            val doc = pdfDocument ?: return@AnnotationAdapter
-                            val uri = intent.data?.toString() ?: return@AnnotationAdapter
-
-                            lifecycleScope.launch {
-                                val deleted = doc.deleteMarkupAnnotation(entry.page, entry.type, entry.quads)
-                                val saved = deleted && doc.saveDocument()
-                                if (deleted && saved) {
-                                    annotationStore.removeAnnotation(uri, index)
-                                    if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
-                                        bookView?.invalidatePage(entry.page)
-                                    } else {
-                                        verticalView?.invalidatePage(entry.page)
-                                    }
-                                    dialog.dismiss()
-                                    showAnnotationsPanel()
-                                } else {
-                                    Toast.makeText(
-                                        this@ReaderActivity,
-                                        R.string.delete_highlight_failed,
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                            }
-                        }
-                    )
+            highlightsList.adapter = adapter
+            ItemTouchHelper(SwipeToDeleteCallback(adapter, dialog, uri)).attachToRecyclerView(highlightsList)
         } else if (bookmark == null) {
             emptyState.visibility = View.VISIBLE
         }
@@ -545,11 +525,58 @@ highlightsList.adapter = AnnotationAdapter(
         dialog.show()
     }
 
-private inner class AnnotationAdapter(
-            private val items: MutableList<AnnotationStore.AnnotationEntry>,
-            private val onClick: (AnnotationStore.AnnotationEntry) -> Unit,
-            private val onDelete: (Int, AnnotationStore.AnnotationEntry) -> Unit
-        ) : RecyclerView.Adapter<AnnotationAdapter.VH>() {
+    private fun confirmDeleteHighlight(onConfirm: () -> Unit, onCancel: () -> Unit) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.delete_highlight_title)
+            .setMessage(R.string.delete_highlight_message)
+            .setNegativeButton(android.R.string.cancel) { dialog, _ ->
+                dialog.dismiss()
+                onCancel()
+            }
+            .setOnCancelListener {
+                onCancel()
+            }
+            .setPositiveButton(R.string.delete_highlight_confirm) { dialog, _ ->
+                dialog.dismiss()
+                onConfirm()
+            }
+            .show()
+    }
+
+    private fun deleteHighlight(
+        uri: String,
+        index: Int,
+        entry: AnnotationStore.AnnotationEntry,
+        onSuccess: () -> Unit,
+        onFailure: () -> Unit
+    ) {
+        val doc = pdfDocument ?: return
+        lifecycleScope.launch {
+            val deleted = doc.deleteMarkupAnnotation(entry.page, entry.type, entry.quads)
+            val saved = deleted && doc.saveDocument()
+            if (deleted && saved) {
+                annotationStore.removeAnnotation(uri, index)
+                if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                    bookView?.invalidatePage(entry.page)
+                } else {
+                    verticalView?.invalidatePage(entry.page)
+                }
+                onSuccess()
+            } else {
+                Toast.makeText(
+                    this@ReaderActivity,
+                    R.string.delete_highlight_failed,
+                    Toast.LENGTH_SHORT
+                ).show()
+                onFailure()
+            }
+        }
+    }
+
+    private inner class AnnotationAdapter(
+        private val items: MutableList<AnnotationStore.AnnotationEntry>,
+        private val onClick: (AnnotationStore.AnnotationEntry) -> Unit
+    ) : RecyclerView.Adapter<AnnotationAdapter.VH>() {
 
         inner class VH(view: View) : RecyclerView.ViewHolder(view) {
             val page: TextView = view.findViewById(R.id.annotPage)
@@ -561,17 +588,96 @@ private inner class AnnotationAdapter(
             return VH(v)
         }
 
-override fun onBindViewHolder(holder: VH, position: Int) {
-                val entry = items[position]
-                holder.page.text = getString(R.string.annotations_page_format, entry.page + 1)
-                holder.text.text = entry.textSnippet
-                holder.itemView.setOnClickListener { onClick(entry) }
-                // Delete button
-                val deleteBtn = holder.itemView.findViewById<ImageView>(R.id.deleteBtn)
-                deleteBtn?.setOnClickListener { onDelete(position, entry) }
-            }
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val entry = items[position]
+            holder.page.text = getString(R.string.annotations_page_format, entry.page + 1)
+            holder.text.text = entry.textSnippet
+            holder.itemView.setOnClickListener { onClick(entry) }
+        }
 
         override fun getItemCount() = items.size
+
+        fun removeAt(position: Int): AnnotationStore.AnnotationEntry? {
+            if (position !in items.indices) return null
+            val removed = items.removeAt(position)
+            notifyItemRemoved(position)
+            return removed
+        }
+
+        fun restoreItem(position: Int, entry: AnnotationStore.AnnotationEntry) {
+            val insertAt = position.coerceIn(0, items.size)
+            items.add(insertAt, entry)
+            notifyItemInserted(insertAt)
+        }
+
+        fun getItem(position: Int): AnnotationStore.AnnotationEntry? = items.getOrNull(position)
+    }
+
+    private inner class SwipeToDeleteCallback(
+        private val adapter: AnnotationAdapter,
+        private val dialog: BottomSheetDialog,
+        private val uri: String
+    ) : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
+
+        override fun onMove(
+            recyclerView: RecyclerView,
+            viewHolder: RecyclerView.ViewHolder,
+            target: RecyclerView.ViewHolder
+        ): Boolean = false
+
+        override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+            val position = viewHolder.bindingAdapterPosition
+            if (position == RecyclerView.NO_POSITION) return
+            val entry = adapter.getItem(position) ?: return
+            val removed = adapter.removeAt(position) ?: return
+            confirmDeleteHighlight(
+                onConfirm = {
+                    deleteHighlight(
+                        uri = uri,
+                        index = position,
+                        entry = entry,
+                        onSuccess = {
+                            dialog.dismiss()
+                            showAnnotationsPanel()
+                        },
+                        onFailure = {
+                            adapter.restoreItem(position, removed)
+                        }
+                    )
+                },
+                onCancel = {
+                    adapter.restoreItem(position, removed)
+                }
+            )
+        }
+
+        override fun onChildDraw(
+            c: android.graphics.Canvas,
+            recyclerView: RecyclerView,
+            viewHolder: RecyclerView.ViewHolder,
+            dX: Float,
+            dY: Float,
+            actionState: Int,
+            isCurrentlyActive: Boolean
+        ) {
+            val itemView = viewHolder.itemView
+            val background = ColorDrawable(ContextCompat.getColor(this@ReaderActivity, R.color.swipe_delete_red))
+            val icon = ContextCompat.getDrawable(this@ReaderActivity, android.R.drawable.ic_menu_delete) ?: return
+            val iconMargin = (itemView.height - icon.intrinsicHeight) / 2
+            val iconTop = itemView.top + iconMargin
+            val iconBottom = iconTop + icon.intrinsicHeight
+
+            if (dX < 0) {
+                background.setBounds(itemView.right + dX.toInt(), itemView.top, itemView.right, itemView.bottom)
+                background.draw(c)
+                val iconLeft = itemView.right - iconMargin - icon.intrinsicWidth
+                val iconRight = itemView.right - iconMargin
+                icon.setBounds(iconLeft, iconTop, iconRight, iconBottom)
+                icon.draw(c)
+            }
+
+            super.onChildDraw(c, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive)
+        }
     }
 
     private fun clearSelectionOverlays() {
