@@ -290,7 +290,12 @@ class ReaderActivity : AppCompatActivity() {
             settingsStore.darkMode = newDark
             lifecycleScope.launch {
                 pdfDocument?.setDarkMode(newDark)
-                recreate()
+                // Force refresh of all pages to ensure annotations are properly rendered
+                if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                    bookView?.refreshAllPages()
+                } else {
+                    verticalView?.refreshAllPages()
+                }
             }
         }
 

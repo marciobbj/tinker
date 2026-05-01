@@ -329,6 +329,14 @@ class PdfVerticalView @JvmOverloads constructor(
         }
     }
 
+    // Added method to force refresh all pages when theme changes
+    fun refreshAllPages() {
+        holders.forEach { (page, _) ->
+            holders[page]?.needsRerender = true
+        }
+        invalidate()
+    }
+
     private fun updateSelectionPaint() {
         selectionPaint.color = if (isDarkTheme) Color.argb(120, 255, 214, 102) else Color.argb(90, 255, 214, 102)
     }

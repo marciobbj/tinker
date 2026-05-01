@@ -347,6 +347,17 @@ class PdfBookView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Forces all pages to be rerendered during the next draw cycle.
+     * Useful when global display settings change (e.g. theme switch).
+     */
+    fun refreshAllPages() {
+        holders.forEach { (page, _) ->
+            holders[page]?.needsRerender = true
+        }
+        invalidate()
+    }
+
     private fun updateSelectionPaint() {
         selectionPaint.color = if (isDarkTheme) Color.argb(120, 255, 214, 102) else Color.argb(90, 255, 214, 102)
     }
