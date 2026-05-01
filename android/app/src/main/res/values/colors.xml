@@ -5,4 +5,5 @@
     <color name="orange_500">#F77A0C</color>
     <color name="orange_700">#C55E00</color>
     <color name="orange_900">#7A3900</color>
+    <color name="highlight_color">#FFE082</color>
 </resources>

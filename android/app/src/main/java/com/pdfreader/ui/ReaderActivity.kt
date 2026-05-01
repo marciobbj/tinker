@@ -10,6 +10,7 @@ import android.view.View
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.Color
+import androidx.core.content.ContextCompat
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -446,7 +447,7 @@ class ReaderActivity : AppCompatActivity() {
     private fun applyHighlight(page: Int, quads: FloatArray, text: String = "") {
         val doc = pdfDocument ?: return
         val uri = intent.data?.toString() ?: return
-        val highlightColor = Color.parseColor("#FFE082")
+        val highlightColor = ContextCompat.getColor(this, R.color.highlight_color)
         val opacity = 0.35f
         lifecycleScope.launch {
             val ok = doc.addMarkupAnnotation(page, PdfDocument.ANNOT_HIGHLIGHT, quads, highlightColor, opacity)

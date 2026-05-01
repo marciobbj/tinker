@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Highlight color for dark mode: bright cyan for contrast -->
+    <color name="highlight_color">#80D8FF</color>
+</resources>
