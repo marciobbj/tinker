@@ -86,6 +86,34 @@ rm -rf app/.cxx app/build .gradle
 
 ## Testar
 
+## Executar o Emulador Android
+
+Para depurar o app no emulador, siga os passos abaixo:
+
+```bash
+# Listar AVDs configurados
+/opt/android-sdk/emulator/emulator -list-avds
+
+# Iniciar o emulador (substitua <avd_name> pelo nome da AVD, ex.: flutter_emulator)
+# Use a janela gráfica para visualizar a UI
+/opt/android-sdk/emulator/emulator -avd <avd_name> -no-audio -no-boot-anim &
+
+# Aguarde o emulador ficar pronto (verifique com adb)
+adb wait-for-device
+adb devices   # deve aparecer algo como emulator-5554   device
+
+# Instalar o APK de depuração
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+
+# Iniciar a aplicação
+adb shell am start -n com.pdfreader/.ui.MainActivity
+```
+
+Opcionalmente, pode‑se usar `-no-window` para rodar sem UI (útil em CI) mas, para visualização, omita essa flag.
+
+## Notas
+...
+
 - Android: `./gradlew assembleDebug`
 - Core desktop: `cmake -B build core && cmake --build build`
 
