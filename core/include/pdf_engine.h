@@ -66,7 +66,8 @@ public:
 
     // Markup annotations (highlight/underline/strike-out)
     bool addMarkupAnnotation(int pageNumber, int type, const float* quadData, int quadCount,
-                             float r, float g, float b, float opacity);
+                                 float r, float g, float b, float opacity);
+    bool deleteMarkupAnnotation(int pageNumber, int type, const float* quadData, int quadCount);
 
     // Save document (persist annotations)
     bool saveDocument();

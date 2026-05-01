@@ -20,6 +20,7 @@ object PdfNative {
     external fun nativeGetSelectionQuads(handle: Long, pageNumber: Int, ax: Float, ay: Float, bx: Float, by: Float, mode: Int): FloatArray?
     external fun nativeCopySelection(handle: Long, pageNumber: Int, ax: Float, ay: Float, bx: Float, by: Float, mode: Int): String
     external fun nativeAddMarkupAnnotation(handle: Long, pageNumber: Int, type: Int, quads: FloatArray,
-                                           r: Float, g: Float, b: Float, opacity: Float): Boolean
+                                 r: Float, g: Float, b: Float, opacity: Float): Boolean
+    external fun nativeDeleteMarkupAnnotation(handle: Long, pageNumber: Int, type: Int, quads: FloatArray): Boolean
     external fun nativeSaveDocument(handle: Long): Boolean
 }

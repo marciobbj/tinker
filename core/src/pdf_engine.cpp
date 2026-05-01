@@ -3,6 +3,7 @@
 #include <mupdf/fitz/util.h>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 
 namespace pdfcore {
 
@@ -428,19 +429,75 @@ bool PdfEngine::addMarkupAnnotation(int pageNumber, int type, const float* quadD
     return ok;
 }
 
+static bool quads_match_annot(fz_context* ctx, pdf_annot* annot, const float* quadData, int quadCount) {
+    if (!quadData || quadCount <= 0) return false;
+    const int count = pdf_annot_quad_point_count(ctx, annot);
+    if (count != quadCount) return false;
+    for (int i = 0; i < count; ++i) {
+        fz_quad q = pdf_annot_quad_point(ctx, annot, i);
+        size_t o = static_cast<size_t>(i) * 8;
+        const float values[8] = {
+            q.ul.x, q.ul.y, q.ur.x, q.ur.y,
+            q.ll.x, q.ll.y, q.lr.x, q.lr.y
+        };
+        for (int j = 0; j < 8; ++j) {
+            if (std::fabs(values[j] - quadData[o + j]) > 0.5f) return false;
+        }
+    }
+    return true;
+}
+
+// Delete a specific markup annotation on a page
+bool PdfEngine::deleteMarkupAnnotation(int pageNumber, int type, const float* quadData, int quadCount) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return false;
+    fz_page* page = nullptr;
+    pdf_page* pdfPage = nullptr;
+    bool anyDeleted = false;
+    fz_try(m_ctx) {
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        pdfPage = pdf_page_from_fz_page(m_ctx, page);
+        if (!pdfPage) fz_throw(m_ctx, FZ_ERROR_GENERIC, "invalid PDF page");
+        pdf_annot* annot = pdf_first_annot(m_ctx, pdfPage);
+        while (annot) {
+            int annotType = pdf_annot_type(m_ctx, annot);
+            pdf_annot* next = pdf_next_annot(m_ctx, annot);
+            if (annotType == type && quads_match_annot(m_ctx, annot, quadData, quadCount)) {
+                    pdf_delete_annot(m_ctx, pdfPage, annot);
+                    // Ensure page reflects deletion
+                    pdf_update_page(m_ctx, pdfPage);
+                    anyDeleted = true;
+                    // No need to continue after deletion
+                    break;
+            }
+            annot = next;
+        }
+    } fz_catch(m_ctx) {
+        // ignore errors
+    }
+    if (page) fz_drop_page(m_ctx, page);
+    return anyDeleted;
+}
+
 bool PdfEngine::saveDocument() {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!isOpen() || m_path.empty()) return false;
 
     bool ok = false;
+    const std::string tmpPath = m_path + ".tmp";
     fz_try(m_ctx) {
         pdf_document* pdfdoc = pdf_specifics(m_ctx, m_doc);
         if (!pdfdoc) {
             fz_throw(m_ctx, FZ_ERROR_GENERIC, "not a PDF document");
         }
         pdf_write_options opts = pdf_default_write_options;
-        opts.do_incremental = 1;
-        pdf_save_document(m_ctx, pdfdoc, m_path.c_str(), &opts);
+        opts.do_incremental = 0;
+        std::remove(tmpPath.c_str());
+        pdf_save_document(m_ctx, pdfdoc, tmpPath.c_str(), &opts);
+        if (std::rename(tmpPath.c_str(), m_path.c_str()) != 0) {
+            std::remove(tmpPath.c_str());
+            fz_throw(m_ctx, FZ_ERROR_GENERIC, "failed to replace saved document");
+        }
         ok = true;
     }
     fz_catch(m_ctx) {

@@ -18,6 +18,7 @@ class AnnotationStore(context: Context) {
         val page: Int,
         val type: Int,
         val textSnippet: String,
+        val quads: FloatArray,
         val timestamp: Long = System.currentTimeMillis()
     )
 
@@ -40,6 +41,9 @@ class AnnotationStore(context: Context) {
                         page = obj.getInt("page"),
                         type = obj.getInt("type"),
                         textSnippet = obj.optString("text", ""),
+                        quads = obj.optJSONArray("quads")?.let { arr ->
+                            FloatArray(arr.length()) { i -> arr.optDouble(i, 0.0).toFloat() }
+                        } ?: floatArrayOf(),
                         timestamp = obj.optLong("timestamp", 0)
                     )
                 } catch (_: Exception) { null }
@@ -68,6 +72,9 @@ class AnnotationStore(context: Context) {
                 put("page", entry.page)
                 put("type", entry.type)
                 put("text", entry.textSnippet)
+                put("quads", JSONArray().apply {
+                    for (value in entry.quads) put(value)
+                })
                 put("timestamp", entry.timestamp)
             })
         }

@@ -181,6 +181,12 @@ class PdfDocument(private val filePath: String) {
             PdfNative.nativeAddMarkupAnnotation(handle, pageNumber, type, quads, r, g, b, opacity)
         }
 
+    suspend fun deleteMarkupAnnotation(pageNumber: Int, type: Int, quads: FloatArray): Boolean =
+        withContext(renderDispatcher) {
+            if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount) return@withContext false
+            PdfNative.nativeDeleteMarkupAnnotation(handle, pageNumber, type, quads)
+        }
+
     suspend fun saveDocument(): Boolean = withContext(renderDispatcher) {
         if (!isOpen || handle == 0L) return@withContext false
         PdfNative.nativeSaveDocument(handle)

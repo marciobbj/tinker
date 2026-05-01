@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
@@ -464,7 +465,8 @@ class ReaderActivity : AppCompatActivity() {
                 annotationStore.addAnnotation(uri, AnnotationStore.AnnotationEntry(
                     page = page,
                     type = PdfDocument.ANNOT_HIGHLIGHT,
-                    textSnippet = snippet
+                    textSnippet = snippet,
+                    quads = quads
                 ))
                 if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
                     bookView?.invalidatePage(page)
@@ -504,10 +506,38 @@ class ReaderActivity : AppCompatActivity() {
         if (annotations.isNotEmpty()) {
             highlightsHeader.visibility = View.VISIBLE
             highlightsList.layoutManager = LinearLayoutManager(this)
-            highlightsList.adapter = AnnotationAdapter(annotations) { entry ->
-                applyPageToCurrentView(entry.page)
-                dialog.dismiss()
-            }
+highlightsList.adapter = AnnotationAdapter(
+                        annotations.toMutableList(),
+                        { entry ->
+                            applyPageToCurrentView(entry.page)
+                            dialog.dismiss()
+                        },
+                        { index, entry ->
+                            val doc = pdfDocument ?: return@AnnotationAdapter
+                            val uri = intent.data?.toString() ?: return@AnnotationAdapter
+
+                            lifecycleScope.launch {
+                                val deleted = doc.deleteMarkupAnnotation(entry.page, entry.type, entry.quads)
+                                val saved = deleted && doc.saveDocument()
+                                if (deleted && saved) {
+                                    annotationStore.removeAnnotation(uri, index)
+                                    if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                                        bookView?.invalidatePage(entry.page)
+                                    } else {
+                                        verticalView?.invalidatePage(entry.page)
+                                    }
+                                    dialog.dismiss()
+                                    showAnnotationsPanel()
+                                } else {
+                                    Toast.makeText(
+                                        this@ReaderActivity,
+                                        R.string.delete_highlight_failed,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        }
+                    )
         } else if (bookmark == null) {
             emptyState.visibility = View.VISIBLE
         }
@@ -515,10 +545,11 @@ class ReaderActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private inner class AnnotationAdapter(
-        private val items: List<AnnotationStore.AnnotationEntry>,
-        private val onClick: (AnnotationStore.AnnotationEntry) -> Unit
-    ) : RecyclerView.Adapter<AnnotationAdapter.VH>() {
+private inner class AnnotationAdapter(
+            private val items: MutableList<AnnotationStore.AnnotationEntry>,
+            private val onClick: (AnnotationStore.AnnotationEntry) -> Unit,
+            private val onDelete: (Int, AnnotationStore.AnnotationEntry) -> Unit
+        ) : RecyclerView.Adapter<AnnotationAdapter.VH>() {
 
         inner class VH(view: View) : RecyclerView.ViewHolder(view) {
             val page: TextView = view.findViewById(R.id.annotPage)
@@ -530,12 +561,15 @@ class ReaderActivity : AppCompatActivity() {
             return VH(v)
         }
 
-        override fun onBindViewHolder(holder: VH, position: Int) {
-            val entry = items[position]
-            holder.page.text = getString(R.string.annotations_page_format, entry.page + 1)
-            holder.text.text = entry.textSnippet
-            holder.itemView.setOnClickListener { onClick(entry) }
-        }
+override fun onBindViewHolder(holder: VH, position: Int) {
+                val entry = items[position]
+                holder.page.text = getString(R.string.annotations_page_format, entry.page + 1)
+                holder.text.text = entry.textSnippet
+                holder.itemView.setOnClickListener { onClick(entry) }
+                // Delete button
+                val deleteBtn = holder.itemView.findViewById<ImageView>(R.id.deleteBtn)
+                deleteBtn?.setOnClickListener { onDelete(position, entry) }
+            }
 
         override fun getItemCount() = items.size
     }
