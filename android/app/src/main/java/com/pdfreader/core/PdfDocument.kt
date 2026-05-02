@@ -1,6 +1,7 @@
 package com.pdfreader.core
 
 import android.graphics.Bitmap
+import android.graphics.Color
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.isActive
@@ -30,6 +31,15 @@ class PdfDocument(private val filePath: String) {
             Thread(r, "pdf-render").apply { isDaemon = true }
         }
         private val renderDispatcher = renderExecutor.asCoroutineDispatcher()
+
+        const val SELECT_CHARS = 0
+        const val SELECT_WORDS = 1
+        const val SELECT_LINES = 2
+
+        const val ANNOT_HIGHLIGHT = 8
+        const val ANNOT_UNDERLINE = 9
+        const val ANNOT_SQUIGGLY = 10
+        const val ANNOT_STRIKE_OUT = 11
     }
 
     suspend fun open(precachePageSizes: Boolean = true): Boolean = withContext(renderDispatcher) {
@@ -94,6 +104,19 @@ class PdfDocument(private val filePath: String) {
         return pageSizeCache[pageNumber]
     }
 
+    suspend fun getPageSizeAsync(pageNumber: Int): Pair<Float, Float>? = withContext(renderDispatcher) {
+        if (!isOpen || handle == 0L) return@withContext null
+        val cached = pageSizeCache[pageNumber]
+        if (cached != null) return@withContext cached
+        val arr = PdfNative.nativeGetPageSize(handle, pageNumber)
+        if (arr != null && arr.size >= 2) {
+            val size = arr[0] to arr[1]
+            pageSizeCache[pageNumber] = size
+            if (arr[0] > _maxWidth) _maxWidth = arr[0]
+        }
+        return@withContext pageSizeCache[pageNumber]
+    }
+
     /**
      * Ensures all page sizes and max width are available for layout-dependent modes.
      */
@@ -135,5 +158,37 @@ class PdfDocument(private val filePath: String) {
 
     suspend fun getTitle(): String = withContext(renderDispatcher) {
         if (handle != 0L) PdfNative.nativeGetTitle(handle) else ""
+    }
+
+    suspend fun getSelectionQuads(pageNumber: Int, ax: Float, ay: Float, bx: Float, by: Float, mode: Int): FloatArray? =
+        withContext(renderDispatcher) {
+            if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount) return@withContext null
+            PdfNative.nativeGetSelectionQuads(handle, pageNumber, ax, ay, bx, by, mode)
+        }
+
+    suspend fun copySelectionText(pageNumber: Int, ax: Float, ay: Float, bx: Float, by: Float, mode: Int): String =
+        withContext(renderDispatcher) {
+            if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount) return@withContext ""
+            PdfNative.nativeCopySelection(handle, pageNumber, ax, ay, bx, by, mode)
+        }
+
+    suspend fun addMarkupAnnotation(pageNumber: Int, type: Int, quads: FloatArray, color: Int, opacity: Float): Boolean =
+        withContext(renderDispatcher) {
+            if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount || quads.isEmpty()) return@withContext false
+            val r = Color.red(color) / 255f
+            val g = Color.green(color) / 255f
+            val b = Color.blue(color) / 255f
+            PdfNative.nativeAddMarkupAnnotation(handle, pageNumber, type, quads, r, g, b, opacity)
+        }
+
+    suspend fun deleteMarkupAnnotation(pageNumber: Int, type: Int, quads: FloatArray): Boolean =
+        withContext(renderDispatcher) {
+            if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount) return@withContext false
+            PdfNative.nativeDeleteMarkupAnnotation(handle, pageNumber, type, quads)
+        }
+
+    suspend fun saveDocument(): Boolean = withContext(renderDispatcher) {
+        if (!isOpen || handle == 0L) return@withContext false
+        PdfNative.nativeSaveDocument(handle)
     }
 }

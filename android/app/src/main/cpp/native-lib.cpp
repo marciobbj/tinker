@@ -4,6 +4,7 @@
 #include <memory>
 #include <unordered_map>
 #include <mutex>
+#include <vector>
 
 #include "pdf_engine.h"
 
@@ -114,6 +115,76 @@ Java_com_pdfreader_core_PdfNative_nativeGetPageSize(JNIEnv* env, jclass clazz, j
     jfloat values[2] = { info.width, info.height };
     env->SetFloatArrayRegion(result, 0, 2, values);
     return result;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_pdfreader_core_PdfNative_nativeGetSelectionQuads(JNIEnv* env, jclass clazz, jlong handle, jint pageNumber,
+                                                          jfloat ax, jfloat ay, jfloat bx, jfloat by, jint mode) {
+    auto engine = getEngine(handle);
+    if (!engine) return nullptr;
+
+    std::vector<float> quads = engine->getSelectionQuads(pageNumber, ax, ay, bx, by, mode);
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(quads.size()));
+    if (!result) return nullptr;
+    if (!quads.empty()) {
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(quads.size()), quads.data());
+    }
+    return result;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_pdfreader_core_PdfNative_nativeCopySelection(JNIEnv* env, jclass clazz, jlong handle, jint pageNumber,
+                                                      jfloat ax, jfloat ay, jfloat bx, jfloat by, jint mode) {
+    auto engine = getEngine(handle);
+    if (!engine) return env->NewStringUTF("");
+
+    std::string text = engine->copySelectionText(pageNumber, ax, ay, bx, by, mode);
+    return env->NewStringUTF(text.c_str());
+}
+JNIEXPORT jboolean JNICALL
+Java_com_pdfreader_core_PdfNative_nativeAddMarkupAnnotation(JNIEnv* env, jclass clazz, jlong handle,
+                                                            jint pageNumber,
+                                                            jint type, jfloatArray quadArray,
+                                                            jfloat r, jfloat g, jfloat b, jfloat opacity) {
+    auto engine = getEngine(handle);
+    if (!engine || !quadArray) return JNI_FALSE;
+
+    jsize len = env->GetArrayLength(quadArray);
+    if (len <= 0 || (len % 8) != 0) return JNI_FALSE;
+
+    jfloat* data = env->GetFloatArrayElements(quadArray, nullptr);
+    if (!data) return JNI_FALSE;
+
+    int quadCount = static_cast<int>(len / 8);
+    bool ok = engine->addMarkupAnnotation(pageNumber, type, data, quadCount, r, g, b, opacity);
+    env->ReleaseFloatArrayElements(quadArray, data, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+// Delete all markup annotations of a given type on a page
+JNIEXPORT jboolean JNICALL
+Java_com_pdfreader_core_PdfNative_nativeDeleteMarkupAnnotation(JNIEnv* env, jclass clazz, jlong handle,
+                                                               jint pageNumber, jint type, jfloatArray quadArray) {
+    auto engine = getEngine(handle);
+    if (!engine) return JNI_FALSE;
+
+    if (!quadArray) return JNI_FALSE;
+    jsize len = env->GetArrayLength(quadArray);
+    if (len <= 0 || (len % 8) != 0) return JNI_FALSE;
+    jfloat* data = env->GetFloatArrayElements(quadArray, nullptr);
+    if (!data) return JNI_FALSE;
+
+    bool ok = engine->deleteMarkupAnnotation(pageNumber, type, data, static_cast<int>(len / 8));
+    env->ReleaseFloatArrayElements(quadArray, data, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+
+JNIEXPORT jboolean JNICALL
+Java_com_pdfreader_core_PdfNative_nativeSaveDocument(JNIEnv* env, jclass clazz, jlong handle) {
+    auto engine = getEngine(handle);
+    if (!engine) return JNI_FALSE;
+    return engine->saveDocument() ? JNI_TRUE : JNI_FALSE;
 }
 
 } // extern "C"

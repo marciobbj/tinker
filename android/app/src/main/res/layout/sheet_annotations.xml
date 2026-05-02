@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingBottom="24dp">
+
+    <!-- Handle bar -->
+    <View
+        android:layout_width="40dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/bg_sheet_handle" />
+
+    <TextView
+        android:id="@+id/sheetTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/annotations_title"
+        android:textColor="?attr/colorOnSurface"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:fontFamily="sans-serif-medium"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="12dp" />
+
+    <!-- Bookmark section -->
+    <LinearLayout
+        android:id="@+id/bookmarkSection"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/annotations_bookmark_section"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="12sp"
+            android:textAllCaps="true"
+            android:letterSpacing="0.08"
+            android:fontFamily="sans-serif-medium"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="8dp" />
+
+        <LinearLayout
+            android:id="@+id/bookmarkItem"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="20dp"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_bookmark"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/bookmarkText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="14dp"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="14sp" />
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:src="@drawable/ic_chevron_right"
+                android:alpha="0.4"
+                android:importantForAccessibility="no" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Highlights section header -->
+    <TextView
+        android:id="@+id/highlightsHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/annotations_highlights_section"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="12sp"
+        android:textAllCaps="true"
+        android:letterSpacing="0.08"
+        android:fontFamily="sans-serif-medium"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone" />
+
+    <!-- Highlights list container -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/highlightsList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false" />
+
+    <!-- Empty state -->
+    <TextView
+        android:id="@+id/emptyState"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/annotations_empty"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:paddingVertical="40dp"
+        android:paddingHorizontal="20dp"
+        android:visibility="gone" />
+
+</LinearLayout>

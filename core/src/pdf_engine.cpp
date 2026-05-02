@@ -1,7 +1,9 @@
 #include "pdf_engine.h"
 #include <mupdf/pdf.h>
+#include <mupdf/fitz/util.h>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 
 namespace pdfcore {
 
@@ -22,10 +24,12 @@ PdfEngine::~PdfEngine() {
 bool PdfEngine::openDocument(const std::string& path) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_ctx) return false;
+    clearTextCache();
     
     fz_try(m_ctx) {
         m_doc = fz_open_document(m_ctx, path.c_str());
         m_pageCount = fz_count_pages(m_ctx, m_doc);
+        m_path = path;
     }
     fz_catch(m_ctx) {
         m_doc = nullptr;
@@ -37,6 +41,7 @@ bool PdfEngine::openDocument(const std::string& path) {
 
 void PdfEngine::closeDocument() {
     std::lock_guard<std::mutex> lock(m_mutex);
+    clearTextCache();
     if (m_doc && m_ctx) {
         fz_drop_document(m_ctx, m_doc);
         m_doc = nullptr;
@@ -298,6 +303,209 @@ std::string PdfEngine::extractText(int pageNumber) const {
     return "";
 }
 
+std::vector<float> PdfEngine::getSelectionQuads(int pageNumber, float ax, float ay, float bx, float by, int mode) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<float> result;
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return result;
+
+    fz_stext_page* textPage = getOrCreateTextPage(pageNumber);
+    if (!textPage) return result;
+
+    fz_point a = fz_make_point(ax, ay);
+    fz_point b = fz_make_point(bx, by);
+    int selMode = (mode < FZ_SELECT_CHARS || mode > FZ_SELECT_LINES) ? FZ_SELECT_WORDS : mode;
+
+    fz_try(m_ctx) {
+        fz_snap_selection(m_ctx, textPage, &a, &b, selMode);
+
+        int cap = 64;
+        std::vector<fz_quad> quads;
+        while (true) {
+            quads.resize(cap);
+            int count = fz_highlight_selection(m_ctx, textPage, a, b, quads.data(), cap);
+            if (count < cap || cap >= 2048) {
+                quads.resize(count);
+                break;
+            }
+            cap *= 2;
+        }
+
+        result.resize(quads.size() * 8);
+        for (size_t i = 0; i < quads.size(); ++i) {
+            const fz_quad& q = quads[i];
+            size_t o = i * 8;
+            result[o + 0] = q.ul.x;
+            result[o + 1] = q.ul.y;
+            result[o + 2] = q.ur.x;
+            result[o + 3] = q.ur.y;
+            result[o + 4] = q.ll.x;
+            result[o + 5] = q.ll.y;
+            result[o + 6] = q.lr.x;
+            result[o + 7] = q.lr.y;
+        }
+    }
+    fz_catch(m_ctx) {
+        result.clear();
+    }
+
+    return result;
+}
+
+std::string PdfEngine::copySelectionText(int pageNumber, float ax, float ay, float bx, float by, int mode) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return "";
+
+    fz_stext_page* textPage = getOrCreateTextPage(pageNumber);
+    if (!textPage) return "";
+
+    fz_point a = fz_make_point(ax, ay);
+    fz_point b = fz_make_point(bx, by);
+    int selMode = (mode < FZ_SELECT_CHARS || mode > FZ_SELECT_LINES) ? FZ_SELECT_WORDS : mode;
+
+    std::string result;
+    fz_try(m_ctx) {
+        fz_snap_selection(m_ctx, textPage, &a, &b, selMode);
+        char* text = fz_copy_selection(m_ctx, textPage, a, b, 0);
+        if (text) {
+            result.assign(text);
+            fz_free(m_ctx, text);
+        }
+    }
+    fz_catch(m_ctx) {
+        return "";
+    }
+
+    return result;
+}
+
+bool PdfEngine::addMarkupAnnotation(int pageNumber, int type, const float* quadData, int quadCount,
+                                    float r, float g, float b, float opacity) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return false;
+    if (!quadData || quadCount <= 0) return false;
+
+    bool ok = false;
+    fz_page* page = nullptr;
+    pdf_annot* annot = nullptr;
+
+    fz_try(m_ctx) {
+        if (!pdf_specifics(m_ctx, m_doc)) {
+            fz_throw(m_ctx, FZ_ERROR_GENERIC, "not a PDF document");
+        }
+
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        pdf_page* pdfPage = pdf_page_from_fz_page(m_ctx, page);
+        if (!pdfPage) fz_throw(m_ctx, FZ_ERROR_GENERIC, "invalid PDF page");
+
+        annot = pdf_create_annot(m_ctx, pdfPage, static_cast<decltype(PDF_ANNOT_HIGHLIGHT)>(type));
+        if (!annot) fz_throw(m_ctx, FZ_ERROR_GENERIC, "failed to create annotation");
+
+        std::vector<fz_quad> quads;
+        quads.reserve(static_cast<size_t>(quadCount));
+        for (int i = 0; i < quadCount; ++i) {
+            size_t o = static_cast<size_t>(i) * 8;
+            fz_quad q;
+            q.ul = fz_make_point(quadData[o + 0], quadData[o + 1]);
+            q.ur = fz_make_point(quadData[o + 2], quadData[o + 3]);
+            q.ll = fz_make_point(quadData[o + 4], quadData[o + 5]);
+            q.lr = fz_make_point(quadData[o + 6], quadData[o + 7]);
+            quads.push_back(q);
+        }
+
+        const float color[3] = { r, g, b };
+        pdf_set_annot_color(m_ctx, annot, 3, color);
+        pdf_set_annot_opacity(m_ctx, annot, opacity);
+        pdf_set_annot_quad_points(m_ctx, annot, quadCount, quads.data());
+        pdf_update_page(m_ctx, pdfPage);
+        ok = true;
+    }
+    fz_catch(m_ctx) {
+        ok = false;
+    }
+
+    if (annot) pdf_drop_annot(m_ctx, annot);
+    if (page) fz_drop_page(m_ctx, page);
+
+    return ok;
+}
+
+static bool quads_match_annot(fz_context* ctx, pdf_annot* annot, const float* quadData, int quadCount) {
+    if (!quadData || quadCount <= 0) return false;
+    const int count = pdf_annot_quad_point_count(ctx, annot);
+    if (count != quadCount) return false;
+    for (int i = 0; i < count; ++i) {
+        fz_quad q = pdf_annot_quad_point(ctx, annot, i);
+        size_t o = static_cast<size_t>(i) * 8;
+        const float values[8] = {
+            q.ul.x, q.ul.y, q.ur.x, q.ur.y,
+            q.ll.x, q.ll.y, q.lr.x, q.lr.y
+        };
+        for (int j = 0; j < 8; ++j) {
+            if (std::fabs(values[j] - quadData[o + j]) > 0.5f) return false;
+        }
+    }
+    return true;
+}
+
+// Delete a specific markup annotation on a page
+bool PdfEngine::deleteMarkupAnnotation(int pageNumber, int type, const float* quadData, int quadCount) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return false;
+    fz_page* page = nullptr;
+    pdf_page* pdfPage = nullptr;
+    bool anyDeleted = false;
+    fz_try(m_ctx) {
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        pdfPage = pdf_page_from_fz_page(m_ctx, page);
+        if (!pdfPage) fz_throw(m_ctx, FZ_ERROR_GENERIC, "invalid PDF page");
+        pdf_annot* annot = pdf_first_annot(m_ctx, pdfPage);
+        while (annot) {
+            int annotType = pdf_annot_type(m_ctx, annot);
+            pdf_annot* next = pdf_next_annot(m_ctx, annot);
+            if (annotType == type && quads_match_annot(m_ctx, annot, quadData, quadCount)) {
+                    pdf_delete_annot(m_ctx, pdfPage, annot);
+                    // Ensure page reflects deletion
+                    pdf_update_page(m_ctx, pdfPage);
+                    anyDeleted = true;
+                    // No need to continue after deletion
+                    break;
+            }
+            annot = next;
+        }
+    } fz_catch(m_ctx) {
+        // ignore errors
+    }
+    if (page) fz_drop_page(m_ctx, page);
+    return anyDeleted;
+}
+
+bool PdfEngine::saveDocument() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || m_path.empty()) return false;
+
+    bool ok = false;
+    const std::string tmpPath = m_path + ".tmp";
+    fz_try(m_ctx) {
+        pdf_document* pdfdoc = pdf_specifics(m_ctx, m_doc);
+        if (!pdfdoc) {
+            fz_throw(m_ctx, FZ_ERROR_GENERIC, "not a PDF document");
+        }
+        pdf_write_options opts = pdf_default_write_options;
+        opts.do_incremental = 0;
+        std::remove(tmpPath.c_str());
+        pdf_save_document(m_ctx, pdfdoc, tmpPath.c_str(), &opts);
+        if (std::rename(tmpPath.c_str(), m_path.c_str()) != 0) {
+            std::remove(tmpPath.c_str());
+            fz_throw(m_ctx, FZ_ERROR_GENERIC, "failed to replace saved document");
+        }
+        ok = true;
+    }
+    fz_catch(m_ctx) {
+        ok = false;
+    }
+    return ok;
+}
+
 void PdfEngine::setDarkMode(bool enabled) {
     m_darkMode = enabled;
 }
@@ -324,6 +532,40 @@ void PdfEngine::applyDarkMode(uint8_t* pixels, int width, int height) const {
         pixels[i * 4 + 1] = static_cast<uint8_t>(ng * 0.85f + 20);
         pixels[i * 4 + 2] = static_cast<uint8_t>(nb * 0.85f + 20);
     }
+}
+
+fz_stext_page* PdfEngine::getOrCreateTextPage(int pageNumber) const {
+    if (m_textPage && m_textPageNumber == pageNumber) return m_textPage;
+
+    clearTextCache();
+    if (!m_ctx || !m_doc) return nullptr;
+
+    fz_page* page = nullptr;
+    fz_stext_page* textPage = nullptr;
+    fz_stext_options opts;
+
+    fz_try(m_ctx) {
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        fz_init_stext_options(m_ctx, &opts);
+        textPage = fz_new_stext_page_from_page(m_ctx, page, &opts);
+    }
+    fz_catch(m_ctx) {
+        if (page) fz_drop_page(m_ctx, page);
+        return nullptr;
+    }
+
+    if (page) fz_drop_page(m_ctx, page);
+    m_textPage = textPage;
+    m_textPageNumber = pageNumber;
+    return m_textPage;
+}
+
+void PdfEngine::clearTextCache() const {
+    if (m_textPage && m_ctx) {
+        fz_drop_stext_page(m_ctx, m_textPage);
+    }
+    m_textPage = nullptr;
+    m_textPageNumber = -1;
 }
 
 } // namespace pdfcore

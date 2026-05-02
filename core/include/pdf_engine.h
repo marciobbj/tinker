@@ -60,6 +60,18 @@ public:
     // Text extraction (optional, for future search)
     std::string extractText(int pageNumber) const;
 
+    // Text selection
+    std::vector<float> getSelectionQuads(int pageNumber, float ax, float ay, float bx, float by, int mode) const;
+    std::string copySelectionText(int pageNumber, float ax, float ay, float bx, float by, int mode) const;
+
+    // Markup annotations (highlight/underline/strike-out)
+    bool addMarkupAnnotation(int pageNumber, int type, const float* quadData, int quadCount,
+                                 float r, float g, float b, float opacity);
+    bool deleteMarkupAnnotation(int pageNumber, int type, const float* quadData, int quadCount);
+
+    // Save document (persist annotations)
+    bool saveDocument();
+
     // Dark mode
     void setDarkMode(bool enabled);
     bool isDarkMode() const;
@@ -69,9 +81,14 @@ private:
     fz_document* m_doc = nullptr;
     mutable int m_pageCount = -1;
     bool m_darkMode = false;
+    std::string m_path;
     mutable std::mutex m_mutex;
+    mutable fz_stext_page* m_textPage = nullptr;
+    mutable int m_textPageNumber = -1;
 
     void applyDarkMode(uint8_t* pixels, int width, int height) const;
+    fz_stext_page* getOrCreateTextPage(int pageNumber) const;
+    void clearTextCache() const;
 };
 
 } // namespace pdfcore
