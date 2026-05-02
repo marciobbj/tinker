@@ -150,7 +150,11 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.mode_vertical)
             }
             holder.subtitle.text = getString(R.string.page_mode_format, bm.pageNumber + 1, modeStr)
-            holder.itemView.setOnClickListener {
+            val progressPercent = if (bm.totalPages > 0) {
+                ((bm.pageNumber + 1).toFloat() / bm.totalPages * 100).toInt()
+            } else 0
+                holder.progress.text = getString(R.string.progress_format, progressPercent)
+                holder.itemView.setOnClickListener {
                 openReader(Uri.parse(bm.uri))
             }
             holder.deleteBtn.setOnClickListener {

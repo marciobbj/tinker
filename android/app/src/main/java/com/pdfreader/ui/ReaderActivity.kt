@@ -705,7 +705,8 @@ class ReaderActivity : AppCompatActivity() {
                 title = documentTitle,
                 pageNumber = currentPage,
                 scrollY = 0f,
-                displayMode = currentMode
+                displayMode = currentMode,
+                totalPages = pdfDocument?.pageCount ?: 1
             )
             bookmarkStore.save(bm)
         } catch (_: Exception) {

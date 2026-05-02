@@ -14,7 +14,8 @@ class BookmarkStore(context: Context) {
         val pageNumber: Int,
         val scrollY: Float,
         val displayMode: Int, // 0 = vertical, 1 = book
-        val timestamp: Long = System.currentTimeMillis()
+        val timestamp: Long = System.currentTimeMillis(),
+        val totalPages: Int = 1
     )
 
     fun save(bookmark: Bookmark) {
@@ -26,6 +27,7 @@ class BookmarkStore(context: Context) {
                 put("scrollY", bookmark.scrollY)
                 put("displayMode", bookmark.displayMode)
                 put("timestamp", bookmark.timestamp)
+                put("totalPages", bookmark.totalPages)
             }
             prefs.edit().putString(keyFor(bookmark.uri), json.toString()).apply()
         } catch (_: Exception) {
@@ -43,7 +45,8 @@ class BookmarkStore(context: Context) {
                 pageNumber = json.getInt("pageNumber"),
                 scrollY = json.getDouble("scrollY").toFloat(),
                 displayMode = json.getInt("displayMode"),
-                timestamp = json.getLong("timestamp")
+                timestamp = json.getLong("timestamp"),
+                totalPages = json.optInt("totalPages", 1)
             )
         } catch (e: Exception) {
             null
@@ -69,7 +72,8 @@ class BookmarkStore(context: Context) {
                             pageNumber = json.optInt("pageNumber", 0),
                             scrollY = json.optDouble("scrollY", 0.0).toFloat(),
                             displayMode = json.optInt("displayMode", 0),
-                            timestamp = json.optLong("timestamp", 0)
+                            timestamp = json.optLong("timestamp", 0),
+                            totalPages = json.optInt("totalPages", 1)
                         )
                     } catch (_: Exception) { null }
                 }
