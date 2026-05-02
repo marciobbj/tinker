@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         inner class VH(itemView: View) : RecyclerView.ViewHolder(itemView) {
             val title: TextView = itemView.findViewById(R.id.itemTitle)
             val subtitle: TextView = itemView.findViewById(R.id.itemSubtitle)
+            val progress: TextView = itemView.findViewById(R.id.itemProgress)
             val deleteBtn: ImageView = itemView.findViewById(R.id.itemDelete)
         }
 
@@ -153,8 +154,8 @@ class MainActivity : AppCompatActivity() {
             val progressPercent = if (bm.totalPages > 0) {
                 ((bm.pageNumber + 1).toFloat() / bm.totalPages * 100).toInt()
             } else 0
-                holder.progress.text = getString(R.string.progress_format, progressPercent)
-                holder.itemView.setOnClickListener {
+            holder.progress.text = getString(R.string.progress_format, progressPercent)
+            holder.itemView.setOnClickListener {
                 openReader(Uri.parse(bm.uri))
             }
             holder.deleteBtn.setOnClickListener {

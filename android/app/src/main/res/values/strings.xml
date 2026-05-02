@@ -37,5 +37,6 @@
     <string name="annotations_highlights_section">Highlights</string>
     <string name="annotations_empty">No annotations yet.\nLong-press text to highlight it.</string>
     <string name="annotations_page_format">Page %1$d</string>
+    <string name="progress_format">%1$d%%</string>
     <string name="annotations_button">Annotations</string>
 </resources>
