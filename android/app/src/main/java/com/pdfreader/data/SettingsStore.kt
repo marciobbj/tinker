@@ -13,11 +13,16 @@ class SettingsStore(context: Context) {
     var defaultDisplayMode: Int
         get() = prefs.getInt(KEY_DEFAULT_MODE, DISPLAY_MODE_VERTICAL)
         set(value) = prefs.edit().putInt(KEY_DEFAULT_MODE, value).apply()
+    
+    var dictionaryLanguage: String
+        get() = prefs.getString(KEY_DICTIONARY_LANGUAGE, "auto") ?: "auto"
+        set(value) = prefs.edit().putString(KEY_DICTIONARY_LANGUAGE, value).apply()
 
     companion object {
         private const val PREFS_NAME = "pdf_settings"
         private const val KEY_DARK_MODE = "dark_mode"
         private const val KEY_DEFAULT_MODE = "default_display_mode"
+        private const val KEY_DICTIONARY_LANGUAGE = "dictionary_language"
 
         const val DISPLAY_MODE_VERTICAL = 0
         const val DISPLAY_MODE_BOOK = 1

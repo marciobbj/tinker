@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="dictionary_languages">
+        <item>@string/language_auto</item>
+        <item>@string/language_portuguese</item>
+        <item>@string/language_english</item>
+    </string-array>
+</resources>

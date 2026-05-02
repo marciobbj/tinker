@@ -27,4 +27,27 @@
 <string name="remove_recent_title">Remover dos recentes</string>
 <string name="remove_recent_message">Remover "%1$s" da sua lista de documentos recentes?</string>
 <string name="remove_recent_confirm">Remover</string>
+<string name="selection_copy">Copiar texto</string>
+<string name="selection_highlight">Destacar</string>
+<string name="selection_dictionary">Dicionário</string>
+<string name="selection_copied">Texto copiado</string>
+<string name="annotations_title">Anotações</string>
+<string name="annotations_bookmark_section">Marcador</string>
+<string name="annotations_highlights_section">Destaques</string>
+<string name="annotations_empty">Nenhuma anotação ainda.\nPressione e segure o texto para destacá-lo.</string>
+<string name="annotations_page_format">Página %1$d</string>
+<string name="delete_highlight_failed">Não foi possível excluir o destaque. Tente novamente.</string>
+<string name="delete_highlight_title">Excluir destaque?</string>
+<string name="delete_highlight_message">Este destaque será removido permanentemente.</string>
+<string name="delete_highlight_confirm">Excluir</string>
+<string name="annotations_button">Anotações</string>
+<string name="dictionary_examples_label">Exemplos:</string>
+<string name="dictionary_error_no_connection">Sem conexão com a internet ou definição não encontrada</string>
+<string name="dictionary_retry_button">Tentar Novamente</string>
+<string name="settings">Configurações</string>
+<string name="dictionary_language_preference">Idioma do Dicionário</string>
+<string name="dictionary_language_summary">Selecione o idioma padrão para pesquisas no dicionário</string>
+<string name="language_auto">Detectar automaticamente</string>
+<string name="language_portuguese">Português</string>
+<string name="language_english">Inglês</string>
 </resources>

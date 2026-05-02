@@ -70,4 +70,37 @@
             android:fontFamily="sans-serif-medium" />
     </LinearLayout>
 
+    <View
+        android:layout_width="1dp"
+        android:layout_height="24dp"
+        android:background="?attr/colorOnSurfaceVariant"
+        android:alpha="0.2" />
+
+    <LinearLayout
+        android:id="@+id/btnDictionary"
+        android:layout_width="wrap_content"
+        android:layout_height="44dp"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:paddingHorizontal="14dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:focusable="true">
+
+        <ImageView
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:src="@drawable/ic_dictionary"
+            android:importantForAccessibility="no" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:text="@string/selection_dictionary"
+            android:textColor="?attr/colorOnSurface"
+            android:textSize="13sp"
+            android:fontFamily="sans-serif-medium" />
+    </LinearLayout>
+
 </LinearLayout>

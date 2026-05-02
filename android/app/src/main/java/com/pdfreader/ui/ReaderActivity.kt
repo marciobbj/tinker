@@ -31,10 +31,15 @@ import com.pdfreader.R
 import com.pdfreader.core.PdfDocument
 import com.pdfreader.data.AnnotationStore
 import com.pdfreader.data.BookmarkStore
+import com.pdfreader.data.DictionaryRepository
 import com.pdfreader.data.SettingsStore
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.isActive
 import java.io.File
 import java.io.FileOutputStream
 
@@ -66,6 +71,7 @@ class ReaderActivity : AppCompatActivity() {
     private var documentTitle: String = ""
     private var documentReady = false
     private var selectionPopup: PopupWindow? = null
+    private var dictionaryLookupJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applyTheme()
@@ -359,6 +365,64 @@ class ReaderActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    private fun reloadDefinition(
+        word: String,
+        definitionTextView: TextView,
+        examplesTextView: TextView,
+        errorContainer: View,
+        loadingProgressBar: View
+    ) {
+        loadingProgressBar.visibility = View.VISIBLE
+        definitionTextView.visibility = View.GONE
+        examplesTextView.visibility = View.GONE
+        errorContainer.visibility = View.GONE
+
+        dictionaryLookupJob?.cancel()
+        dictionaryLookupJob = lifecycleScope.launch {
+            try {
+                val dictionaryRepo = DictionaryRepository(this@ReaderActivity)
+                val definitionResult = withContext(Dispatchers.IO) {
+                    withTimeoutOrNull(10_000) {
+                        dictionaryRepo.getDefinition(word, detectLanguage(word))
+                    }
+                }
+                
+                if (!isActive) return@launch
+
+                withContext(Dispatchers.Main) {
+                    loadingProgressBar.visibility = View.GONE
+
+                    if (definitionResult != null) {
+                        definitionTextView.visibility = View.VISIBLE
+                        definitionTextView.text = definitionResult.definition
+
+                        if (!definitionResult.examples.isNullOrEmpty()) {
+                            examplesTextView.visibility = View.VISIBLE
+                            examplesTextView.text = getString(R.string.dictionary_examples_label) +
+                                "\n• " + definitionResult.examples.joinToString("\n• ")
+                        } else {
+                            examplesTextView.visibility = View.GONE
+                        }
+
+                        errorContainer.visibility = View.GONE
+                    } else {
+                        showErrorState(errorContainer, null, definitionTextView, examplesTextView, loadingProgressBar)
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    showErrorState(errorContainer, null, definitionTextView, examplesTextView, loadingProgressBar)
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    if (loadingProgressBar.visibility == View.VISIBLE) {
+                        loadingProgressBar.visibility = View.GONE
+                    }
+                }
+            }
+        }
+    }
+
     private fun toggleUi() {
         uiVisible = !uiVisible
         val vis = if (uiVisible) View.VISIBLE else View.GONE
@@ -393,6 +457,22 @@ class ReaderActivity : AppCompatActivity() {
             applyHighlight(page, quads, text)
             dismissSelectionPopup()
             clearSelectionOverlays()
+        }
+
+        // Check if the selected text is a single word
+        val isSingleWord = isSingleWord(text.trim())
+        
+        // Handle dictionary button visibility and click
+        val dictionaryButton = toolbarView.findViewById<View>(R.id.btnDictionary)
+        if (isSingleWord) {
+            dictionaryButton.visibility = View.VISIBLE
+            dictionaryButton.setOnClickListener {
+                showDictionaryDialog(text.trim())
+                dismissSelectionPopup()
+                clearSelectionOverlays()
+            }
+        } else {
+            dictionaryButton.visibility = View.GONE
         }
 
         selectionPopup = popup
@@ -737,4 +817,168 @@ class ReaderActivity : AppCompatActivity() {
             }.start()
         }
     }
+
+    private fun isSingleWord(text: String): Boolean {
+        val trimmedText = text.trim()
+        if (trimmedText.isEmpty()) return false
+
+        val normalized = trimmedText
+            .replace(Regex("[.,;:!?]+$"), "")
+            .replace(Regex("^[.,;:!?]+"), "")
+        if (normalized.isEmpty()) return false
+
+        val words = Regex("[\\p{L}\\p{Mn}]+(?:['’\\-][\\p{L}\\p{Mn}]+)?")
+            .findAll(normalized)
+            .toList()
+
+        return words.size == 1 && normalized.length <= 40
+    }
+
+    private fun showDictionaryDialog(word: String) {
+        val dialog = BottomSheetDialog(this)
+        val view = LayoutInflater.from(this).inflate(R.layout.sheet_dictionary, null)
+        dialog.setContentView(view)
+        dialog.behavior.isFitToContents = false
+        dialog.behavior.expandedOffset = 0
+        dialog.behavior.state = com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED
+        dialog.setOnDismissListener {
+            dictionaryLookupJob?.cancel()
+            dictionaryLookupJob = null
+        }
+
+        val wordTextView = view.findViewById<TextView>(R.id.dictionary_word)
+        val languageTextView = view.findViewById<TextView>(R.id.dictionary_language)
+        val languageSpinner = view.findViewById<android.widget.Spinner>(R.id.dictionary_language_spinner)
+        val loadingProgressBar = view.findViewById<View>(R.id.dictionary_loading_progress)
+        val definitionTextView = view.findViewById<TextView>(R.id.dictionary_definition)
+        val examplesTextView = view.findViewById<TextView>(R.id.dictionary_examples)
+        val errorContainer = view.findViewById<View>(R.id.dictionary_error_container)
+        val retryButton = view.findViewById<View>(R.id.dictionary_retry_button)
+
+        wordTextView.text = word
+
+        // Configurar o spinner com o idioma atual
+        val languageOptions = arrayOf(
+            getString(R.string.language_auto),
+            getString(R.string.language_portuguese),
+            getString(R.string.language_english)
+        )
+        
+        val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, languageOptions)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        languageSpinner.adapter = adapter
+        
+        // Definir o idioma atual selecionado
+        val currentLangSetting = settingsStore.dictionaryLanguage
+        val selectedIndex = when (currentLangSetting) {
+            "pt-BR" -> 1  // Portuguese
+            "en" -> 2      // English
+            else -> 0      // Auto detect
+        }
+        languageSpinner.setSelection(selectedIndex)
+        
+        // Atualizar o texto do idioma
+        languageTextView.text = when(currentLangSetting) {
+            "pt-BR" -> getString(R.string.language_portuguese)
+            "en" -> getString(R.string.language_english)
+            else -> getString(R.string.language_auto)
+        }
+
+        // Listener para quando o idioma é alterado
+        languageSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>, view: View?, position: Int, id: Long) {
+                val newLanguageCode = when (position) {
+                    1 -> "pt-BR"
+                    2 -> "en"
+                    else -> "auto"
+                }
+                
+                settingsStore.dictionaryLanguage = newLanguageCode
+                
+                // Atualizar o texto do idioma
+                languageTextView.text = when(position) {
+                    1 -> getString(R.string.language_portuguese)
+                    2 -> getString(R.string.language_english)
+                    else -> getString(R.string.language_auto)
+                }
+                
+                // Recarregar a definição com o novo idioma
+                reloadDefinition(word, definitionTextView, examplesTextView, errorContainer, loadingProgressBar)
+            }
+
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>) {
+                // Não faz nada
+            }
+        }
+
+        // Initially show loading
+        loadingProgressBar.visibility = View.VISIBLE
+        definitionTextView.visibility = View.GONE
+        examplesTextView.visibility = View.GONE
+        errorContainer.visibility = View.GONE
+
+        val loadDefinition = {
+            reloadDefinition(word, definitionTextView, examplesTextView, errorContainer, loadingProgressBar)
+        }
+
+        loadDefinition()
+
+        // Implementar o listener do retryButton para chamar a função de carregamento
+        retryButton.setOnClickListener {
+            // Resetar o estado de erro e carregar novamente
+            errorContainer.visibility = View.GONE
+            definitionTextView.visibility = View.GONE
+            examplesTextView.visibility = View.GONE
+            loadingProgressBar.visibility = View.VISIBLE
+            loadDefinition()
+        }
+
+        dialog.show()
+    }
+
+    private fun showErrorState(
+        errorContainer: View, 
+        retryButton: View?, 
+        definitionTextView: TextView, 
+        examplesTextView: TextView, 
+        loadingProgressBar: View
+    ) {
+        loadingProgressBar.visibility = View.GONE
+        definitionTextView.visibility = View.GONE
+        examplesTextView.visibility = View.GONE
+        errorContainer.visibility = View.VISIBLE
+        
+        retryButton?.setOnClickListener {
+            // Reset UI and try again
+            errorContainer.visibility = View.GONE
+            loadingProgressBar.visibility = View.VISIBLE
+            definitionTextView.visibility = View.GONE
+            examplesTextView.visibility = View.GONE
+        }
+    }
+
+    private fun detectLanguage(word: String): String {
+        // Verificar as configurações do usuário para o idioma do dicionário
+        val userSetting = settingsStore.dictionaryLanguage
+        return when (userSetting) {
+            "pt-BR" -> "pt-BR"
+            "en" -> "en"
+            "auto" -> {
+                // Detectar automaticamente com base na localização do sistema
+                if (resources.configuration.locale.language == "pt") {
+                    "pt-BR"
+                } else {
+                    "en"
+                }
+            }
+            else -> "en" // padrão
+        }
+    }
+
+    // Dictionary lookup functions are now handled by DictionaryRepository
+
+    data class DefinitionResult(
+        val definition: String,
+        val examples: List<String>?
+    )
 }
