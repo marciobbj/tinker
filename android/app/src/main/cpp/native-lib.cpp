@@ -187,4 +187,76 @@ Java_com_pdfreader_core_PdfNative_nativeSaveDocument(JNIEnv* env, jclass clazz, 
     return engine->saveDocument() ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_pdfreader_core_PdfNative_nativeAddInkAnnotation(JNIEnv* env, jclass clazz, jlong handle,
+                                                         jint pageNumber, jfloatArray pointsArray,
+                                                         jintArray strokeLengthsArray, jint strokeCount,
+                                                         jfloat r, jfloat g, jfloat b, jfloat opacity,
+                                                         jfloat lineWidth) {
+    auto engine = getEngine(handle);
+    if (!engine || !pointsArray || !strokeLengthsArray) return JNI_FALSE;
+
+    jsize pointsLen = env->GetArrayLength(pointsArray);
+    jsize lengthsLen = env->GetArrayLength(strokeLengthsArray);
+    if (pointsLen <= 0 || lengthsLen != strokeCount) return JNI_FALSE;
+
+    jfloat* points = env->GetFloatArrayElements(pointsArray, nullptr);
+    jint* lengths = env->GetIntArrayElements(strokeLengthsArray, nullptr);
+    if (!points || !lengths) {
+        if (points) env->ReleaseFloatArrayElements(pointsArray, points, JNI_ABORT);
+        if (lengths) env->ReleaseIntArrayElements(strokeLengthsArray, lengths, JNI_ABORT);
+        return JNI_FALSE;
+    }
+
+    bool ok = engine->addInkAnnotation(pageNumber, points, lengths, strokeCount, r, g, b, opacity, lineWidth);
+
+    env->ReleaseFloatArrayElements(pointsArray, points, JNI_ABORT);
+    env->ReleaseIntArrayElements(strokeLengthsArray, lengths, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_pdfreader_core_PdfNative_nativeDeleteInkAnnotation(JNIEnv* env, jclass clazz, jlong handle,
+                                                            jint pageNumber, jfloatArray matchPointsArray) {
+    auto engine = getEngine(handle);
+    if (!engine) return JNI_FALSE;
+
+    if (!matchPointsArray) return JNI_FALSE;
+    jsize len = env->GetArrayLength(matchPointsArray);
+    if (len <= 0 || (len % 2) != 0) return JNI_FALSE;
+
+    jfloat* data = env->GetFloatArrayElements(matchPointsArray, nullptr);
+    if (!data) return JNI_FALSE;
+
+    bool ok = engine->deleteInkAnnotation(pageNumber, data, static_cast<int>(len / 2));
+    env->ReleaseFloatArrayElements(matchPointsArray, data, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_pdfreader_core_PdfNative_nativeGetInkAnnotations(JNIEnv* env, jclass clazz, jlong handle,
+                                                          jint pageNumber) {
+    auto engine = getEngine(handle);
+    if (!engine) return nullptr;
+
+    std::vector<float> data = engine->getInkAnnotations(pageNumber);
+    if (data.empty()) return nullptr;
+
+    jfloatArray result = env->NewFloatArray(data.size());
+    if (!result) return nullptr;
+
+    env->SetFloatArrayRegion(result, 0, data.size(), data.data());
+    return result;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_pdfreader_core_PdfNative_nativeClearInkAnnotations(JNIEnv* env, jclass clazz, jlong handle,
+                                                            jint pageNumber) {
+    auto engine = getEngine(handle);
+    if (!engine) return JNI_FALSE;
+
+    bool ok = engine->clearInkAnnotations(pageNumber);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
 } // extern "C"

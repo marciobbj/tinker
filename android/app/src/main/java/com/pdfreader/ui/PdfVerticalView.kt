@@ -608,6 +608,7 @@ class PdfVerticalView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!touchEnabled) return false
         if (e.action == MotionEvent.ACTION_DOWN) scroller.forceFinished(true)
 
         // When selection is active, handle MOVE directly — GestureDetector
@@ -645,6 +646,32 @@ class PdfVerticalView @JvmOverloads constructor(
         scope.cancel()
         recycleAll()
     }
+
+    /**
+     * Transform info for converting between screen and page coordinates.
+     */
+    data class PageTransform(
+        val offsetX: Float,  // page left edge in view coords
+        val offsetY: Float,  // page top edge in view coords (relative to scroll)
+        val scale: Float     // page-to-view scale factor
+    )
+
+    /**
+     * Returns transform info for the given page, or null if page is not laid out.
+     * Used by InkDrawingView to convert between screen and PDF page coordinates.
+     */
+    fun getPageTransform(page: Int): PageTransform? {
+        if (pageOffsets.isEmpty() || page < 0 || page >= pageCount || width <= 0) return null
+        val size = getPageSize?.invoke(page) ?: return null
+        val zoom = (if (maxPageWidth > 0) width.toFloat() / maxPageWidth else 1.0f) * zoomFactor
+        if (zoom <= 0f) return null
+        val pw = size.first * zoom
+        val px = (width - pw) / 2f + panX
+        val py = pageOffsets[page].toFloat() - scrollY
+        return PageTransform(px, py, zoom)
+    }
+
+    var touchEnabled: Boolean = true
 
     private class PageHolder(var w: Int, var h: Int) {
         var bitmap: Bitmap? = null

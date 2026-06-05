@@ -3,6 +3,7 @@ package com.pdfreader.data
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
+import com.pdfreader.core.PdfDocument
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -19,6 +20,8 @@ class AnnotationStore(context: Context) {
         val type: Int,
         val textSnippet: String,
         val quads: FloatArray,
+        val inkPoints: FloatArray = floatArrayOf(),
+        val inkStrokeLengths: IntArray = intArrayOf(),
         val timestamp: Long = System.currentTimeMillis()
     )
 
@@ -37,13 +40,21 @@ class AnnotationStore(context: Context) {
             (0 until arr.length()).mapNotNull { i ->
                 try {
                     val obj = arr.getJSONObject(i)
+                    val type = obj.getInt("type")
+                    if (type == PdfDocument.ANNOT_INK) return@mapNotNull null
                     AnnotationEntry(
                         page = obj.getInt("page"),
-                        type = obj.getInt("type"),
+                        type = type,
                         textSnippet = obj.optString("text", ""),
                         quads = obj.optJSONArray("quads")?.let { arr ->
                             FloatArray(arr.length()) { i -> arr.optDouble(i, 0.0).toFloat() }
                         } ?: floatArrayOf(),
+                        inkPoints = obj.optJSONArray("inkPoints")?.let { arr ->
+                            FloatArray(arr.length()) { i -> arr.optDouble(i, 0.0).toFloat() }
+                        } ?: floatArrayOf(),
+                        inkStrokeLengths = obj.optJSONArray("inkStrokeLengths")?.let { arr ->
+                            IntArray(arr.length()) { i -> arr.optInt(i, 0) }
+                        } ?: intArrayOf(),
                         timestamp = obj.optLong("timestamp", 0)
                     )
                 } catch (_: Exception) { null }
@@ -75,6 +86,16 @@ class AnnotationStore(context: Context) {
                 put("quads", JSONArray().apply {
                     for (value in entry.quads) put(value)
                 })
+                if (entry.inkPoints.isNotEmpty()) {
+                    put("inkPoints", JSONArray().apply {
+                        for (value in entry.inkPoints) put(value)
+                    })
+                }
+                if (entry.inkStrokeLengths.isNotEmpty()) {
+                    put("inkStrokeLengths", JSONArray().apply {
+                        for (value in entry.inkStrokeLengths) put(value)
+                    })
+                }
                 put("timestamp", entry.timestamp)
             })
         }

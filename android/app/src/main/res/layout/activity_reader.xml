@@ -33,6 +33,14 @@
         <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
 
         <ImageButton
+            android:id="@+id/btnPen"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_pen"
+            android:contentDescription="@string/pen_tool" />
+
+        <ImageButton
             android:id="@+id/btnAnnotations"
             android:layout_width="40dp"
             android:layout_height="40dp"
@@ -116,4 +124,14 @@
             android:contentDescription="@string/switch_mode" />
     </LinearLayout>
 
+    <!-- Pen toolbar (shown during drawing mode) -->
+    <include
+        android:id="@+id/penToolbar"
+        layout="@layout/sheet_pen_toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:visibility="gone" />
+
 </FrameLayout>
+
