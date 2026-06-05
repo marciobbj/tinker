@@ -10,6 +10,7 @@
 - **Vertical mode**: continuous vertical scrolling between pages
 - **Book mode**: horizontal paging with swipe and tap zones
 - **Bookmarks**: automatically saves page, mode, and timestamp
+- **Freehand Annotations**: annotate your PDFs and do not lose your thoughts.
 - **Dark mode**: inverts PDF colors for night reading
 - **Text Highlights**: decorate the text you want to have easy access to
 - **Minimalist**: clean UI with no distractions
