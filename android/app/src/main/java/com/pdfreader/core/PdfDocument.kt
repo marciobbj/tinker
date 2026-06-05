@@ -40,6 +40,7 @@ class PdfDocument(private val filePath: String) {
         const val ANNOT_UNDERLINE = 9
         const val ANNOT_SQUIGGLY = 10
         const val ANNOT_STRIKE_OUT = 11
+        const val ANNOT_INK = 15
     }
 
     suspend fun open(precachePageSizes: Boolean = true): Boolean = withContext(renderDispatcher) {
@@ -185,6 +186,35 @@ class PdfDocument(private val filePath: String) {
         withContext(renderDispatcher) {
             if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount) return@withContext false
             PdfNative.nativeDeleteMarkupAnnotation(handle, pageNumber, type, quads)
+        }
+
+    suspend fun addInkAnnotation(
+        pageNumber: Int, points: FloatArray, strokeLengths: IntArray,
+        color: Int, opacity: Float, strokeWidth: Float
+    ): Boolean = withContext(renderDispatcher) {
+        if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount || points.isEmpty()) return@withContext false
+        val r = Color.red(color) / 255f
+        val g = Color.green(color) / 255f
+        val b = Color.blue(color) / 255f
+        PdfNative.nativeAddInkAnnotation(handle, pageNumber, points, strokeLengths, strokeLengths.size, r, g, b, opacity, strokeWidth)
+    }
+
+    suspend fun deleteInkAnnotation(pageNumber: Int, matchPoints: FloatArray): Boolean =
+        withContext(renderDispatcher) {
+            if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount) return@withContext false
+            PdfNative.nativeDeleteInkAnnotation(handle, pageNumber, matchPoints)
+        }
+
+    suspend fun getInkAnnotations(pageNumber: Int): FloatArray? =
+        withContext(renderDispatcher) {
+            if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount) return@withContext null
+            PdfNative.nativeGetInkAnnotations(handle, pageNumber)
+        }
+
+    suspend fun clearInkAnnotations(pageNumber: Int): Boolean =
+        withContext(renderDispatcher) {
+            if (!isOpen || handle == 0L || pageNumber < 0 || pageNumber >= _pageCount) return@withContext false
+            PdfNative.nativeClearInkAnnotations(handle, pageNumber)
         }
 
     suspend fun saveDocument(): Boolean = withContext(renderDispatcher) {

@@ -736,6 +736,7 @@ class PdfBookView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!touchEnabled) return false
         // When selection is active, handle MOVE directly — GestureDetector
         // does NOT forward onScroll events after onLongPress.
         if (selectionActive) {
@@ -800,6 +801,43 @@ class PdfBookView @JvmOverloads constructor(
         crossfadeOldBitmap = null
         pageSizeOverrides.clear()
     }
+
+    /**
+     * Transform info for converting between screen and page coordinates.
+     */
+    data class PageTransform(
+        val offsetX: Float,  // page content left edge in view coords
+        val offsetY: Float,  // page content top edge in view coords
+        val scale: Float     // page-to-view scale factor
+    )
+
+    /**
+     * Returns transform info for the given page, or null if page is not laid out.
+     * Used by InkDrawingView to convert between screen and PDF page coordinates.
+     */
+    fun getPageTransform(page: Int): PageTransform? {
+        if (vw <= 0 || vh <= 0 || pageCount <= 0 || page != currentPage) return null
+        val size = getPageSize?.invoke(page) ?: pageSizeOverrides[page] ?: return null
+
+        val renderW = (vw * zoomFactor).roundToInt().coerceAtLeast(1)
+        val renderH = (vh * zoomFactor).roundToInt().coerceAtLeast(1)
+        val scale = minOf(renderW / size.first, renderH / size.second)
+        if (scale <= 0f) return null
+        val drawnW = size.first * scale
+        val drawnH = size.second * scale
+        val padX = (renderW - drawnW) / 2f
+        val padY = (renderH - drawnH) / 2f
+
+        val pageX = if (isZoomed()) ((vw - renderW) / 2f + panX) else offsetX
+        val pageY = if (isZoomed()) ((vh - renderH) / 2f + panY) else 0f
+
+        val px = pageX + padX
+        val py = pageY + padY
+        return PageTransform(px, py, scale)
+    }
+
+    var touchEnabled: Boolean = true
+
 
     private class PageHolder(var w: Int, var h: Int) {
         var bitmap: Bitmap? = null

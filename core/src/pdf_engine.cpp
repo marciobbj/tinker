@@ -4,6 +4,8 @@
 #include <cstring>
 #include <cmath>
 #include <cstdio>
+#include <android/log.h>
+
 
 namespace pdfcore {
 
@@ -566,6 +568,219 @@ void PdfEngine::clearTextCache() const {
     }
     m_textPage = nullptr;
     m_textPageNumber = -1;
+}
+
+bool PdfEngine::addInkAnnotation(int pageNumber, const float* points, const int* strokeLengths,
+                                  int strokeCount, float r, float g, float b, float opacity, float lineWidth) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return false;
+    if (!points || !strokeLengths || strokeCount <= 0) return false;
+
+    bool ok = false;
+    fz_page* page = nullptr;
+    pdf_annot* annot = nullptr;
+
+    fz_try(m_ctx) {
+        if (!pdf_specifics(m_ctx, m_doc)) {
+            fz_throw(m_ctx, FZ_ERROR_GENERIC, "not a PDF document");
+        }
+
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        pdf_page* pdfPage = pdf_page_from_fz_page(m_ctx, page);
+        if (!pdfPage) fz_throw(m_ctx, FZ_ERROR_GENERIC, "invalid PDF page");
+
+        annot = pdf_create_annot(m_ctx, pdfPage, static_cast<decltype(PDF_ANNOT_INK)>(PDF_ANNOT_INK));
+        if (!annot) fz_throw(m_ctx, FZ_ERROR_GENERIC, "failed to create ink annotation");
+
+        int pointOffset = 0;
+        for (int s = 0; s < strokeCount; s++) {
+            int count = strokeLengths[s];
+            if (count <= 0) continue;
+
+            std::vector<fz_point> strokePoints;
+            strokePoints.reserve(static_cast<size_t>(count));
+            for (int p = 0; p < count; p++) {
+                fz_point pt;
+                pt.x = points[pointOffset * 2];
+                pt.y = points[pointOffset * 2 + 1];
+                strokePoints.push_back(pt);
+                pointOffset++;
+            }
+            pdf_add_annot_ink_list(m_ctx, annot, count, strokePoints.data());
+        }
+
+        const float color[3] = { r, g, b };
+        pdf_set_annot_color(m_ctx, annot, 3, color);
+        pdf_set_annot_opacity(m_ctx, annot, opacity);
+        pdf_set_annot_border_width(m_ctx, annot, lineWidth);
+        pdf_update_page(m_ctx, pdfPage);
+        ok = true;
+    }
+    fz_catch(m_ctx) {
+        ok = false;
+    }
+
+    if (annot) pdf_drop_annot(m_ctx, annot);
+    if (page) fz_drop_page(m_ctx, page);
+
+    return ok;
+}
+
+static bool ink_points_match(fz_context* ctx, pdf_annot* annot, const float* matchPoints, int matchPointCount) {
+    if (!matchPoints || matchPointCount <= 0) {
+        __android_log_print(ANDROID_LOG_DEBUG, "PdfEngine", "ink_points_match: invalid matchPoints or count");
+        return false;
+    }
+    int strokeCount = pdf_annot_ink_list_count(ctx, annot);
+    if (strokeCount <= 0) {
+        __android_log_print(ANDROID_LOG_DEBUG, "PdfEngine", "ink_points_match: strokeCount is %d", strokeCount);
+        return false;
+    }
+
+    // Collect all points from the annotation
+    int totalPoints = 0;
+    for (int s = 0; s < strokeCount; s++) {
+        totalPoints += pdf_annot_ink_list_stroke_count(ctx, annot, s);
+    }
+    __android_log_print(ANDROID_LOG_DEBUG, "PdfEngine", "ink_points_match: totalPoints in PDF = %d, matchPointCount = %d", totalPoints, matchPointCount);
+    if (totalPoints != matchPointCount) return false;
+
+    int idx = 0;
+    for (int s = 0; s < strokeCount; s++) {
+        int count = pdf_annot_ink_list_stroke_count(ctx, annot, s);
+        for (int p = 0; p < count; p++) {
+            fz_point pt = pdf_annot_ink_list_stroke_vertex(ctx, annot, s, p);
+            __android_log_print(ANDROID_LOG_DEBUG, "PdfEngine", "ink_points_match: point %d: PDF=(%f, %f), Match=(%f, %f)",
+                                idx, pt.x, pt.y, matchPoints[idx * 2], matchPoints[idx * 2 + 1]);
+            if (std::fabs(pt.x - matchPoints[idx * 2]) > 0.5f ||
+                std::fabs(pt.y - matchPoints[idx * 2 + 1]) > 0.5f) {
+                __android_log_print(ANDROID_LOG_DEBUG, "PdfEngine", "ink_points_match: point %d mismatch exceeded tolerance", idx);
+                return false;
+            }
+            idx++;
+        }
+    }
+    return true;
+}
+
+
+bool PdfEngine::deleteInkAnnotation(int pageNumber, const float* matchPoints, int matchPointCount) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return false;
+
+    fz_page* page = nullptr;
+    bool anyDeleted = false;
+
+    fz_try(m_ctx) {
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        pdf_page* pdfPage = pdf_page_from_fz_page(m_ctx, page);
+        if (!pdfPage) fz_throw(m_ctx, FZ_ERROR_GENERIC, "invalid PDF page");
+
+        pdf_annot* annot = pdf_first_annot(m_ctx, pdfPage);
+        while (annot) {
+            pdf_annot* next = pdf_next_annot(m_ctx, annot);
+            int annotType = pdf_annot_type(m_ctx, annot);
+            if (annotType == PDF_ANNOT_INK && ink_points_match(m_ctx, annot, matchPoints, matchPointCount)) {
+                pdf_delete_annot(m_ctx, pdfPage, annot);
+                pdf_update_page(m_ctx, pdfPage);
+                anyDeleted = true;
+                break;
+            }
+            annot = next;
+        }
+    }
+    fz_catch(m_ctx) {}
+
+    if (page) fz_drop_page(m_ctx, page);
+    return anyDeleted;
+}
+
+std::vector<float> PdfEngine::getInkAnnotations(int pageNumber) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<float> result;
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return result;
+
+    fz_page* page = nullptr;
+    fz_try(m_ctx) {
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        pdf_page* pdfPage = pdf_page_from_fz_page(m_ctx, page);
+        if (!pdfPage) fz_throw(m_ctx, FZ_ERROR_GENERIC, "invalid PDF page");
+
+        pdf_annot* annot = pdf_first_annot(m_ctx, pdfPage);
+        while (annot) {
+            int annotType = pdf_annot_type(m_ctx, annot);
+            if (annotType == PDF_ANNOT_INK) {
+                // Get color
+                float color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                int color_n = 0;
+                pdf_annot_color(m_ctx, annot, &color_n, color);
+                float r = 0.0f, g = 0.0f, b = 0.0f;
+                if (color_n == 3) {
+                    r = color[0];
+                    g = color[1];
+                    b = color[2];
+                }
+
+                // Get width
+                float width = pdf_annot_border_width(m_ctx, annot);
+
+                int strokeCount = pdf_annot_ink_list_count(m_ctx, annot);
+                for (int s = 0; s < strokeCount; s++) {
+                    int count = pdf_annot_ink_list_stroke_count(m_ctx, annot, s);
+                    if (count <= 0) continue;
+
+                    result.push_back(static_cast<float>(count));
+                    result.push_back(r);
+                    result.push_back(g);
+                    result.push_back(b);
+                    result.push_back(width);
+
+                    for (int p = 0; p < count; p++) {
+                        fz_point pt = pdf_annot_ink_list_stroke_vertex(m_ctx, annot, s, p);
+                        result.push_back(pt.x);
+                        result.push_back(pt.y);
+                    }
+                }
+            }
+            annot = pdf_next_annot(m_ctx, annot);
+        }
+    }
+    fz_catch(m_ctx) {}
+
+    if (page) fz_drop_page(m_ctx, page);
+    return result;
+}
+
+bool PdfEngine::clearInkAnnotations(int pageNumber) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isOpen() || pageNumber < 0 || pageNumber >= m_pageCount) return false;
+
+    fz_page* page = nullptr;
+    bool anyDeleted = false;
+
+    fz_try(m_ctx) {
+        page = fz_load_page(m_ctx, m_doc, pageNumber);
+        pdf_page* pdfPage = pdf_page_from_fz_page(m_ctx, page);
+        if (!pdfPage) fz_throw(m_ctx, FZ_ERROR_GENERIC, "invalid PDF page");
+
+        pdf_annot* annot = pdf_first_annot(m_ctx, pdfPage);
+        while (annot) {
+            pdf_annot* next = pdf_next_annot(m_ctx, annot);
+            int annotType = pdf_annot_type(m_ctx, annot);
+            if (annotType == PDF_ANNOT_INK) {
+                pdf_delete_annot(m_ctx, pdfPage, annot);
+                anyDeleted = true;
+            }
+            annot = next;
+        }
+        if (anyDeleted) {
+            pdf_update_page(m_ctx, pdfPage);
+        }
+    }
+    fz_catch(m_ctx) {}
+
+    if (page) fz_drop_page(m_ctx, page);
+    return anyDeleted;
 }
 
 } // namespace pdfcore

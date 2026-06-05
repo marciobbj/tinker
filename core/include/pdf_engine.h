@@ -69,6 +69,13 @@ public:
                                  float r, float g, float b, float opacity);
     bool deleteMarkupAnnotation(int pageNumber, int type, const float* quadData, int quadCount);
 
+    // Ink (freehand) annotations
+    bool addInkAnnotation(int pageNumber, const float* points, const int* strokeLengths,
+                          int strokeCount, float r, float g, float b, float opacity, float lineWidth);
+    bool deleteInkAnnotation(int pageNumber, const float* matchPoints, int matchPointCount);
+    std::vector<float> getInkAnnotations(int pageNumber);
+    bool clearInkAnnotations(int pageNumber);
+
     // Save document (persist annotations)
     bool saveDocument();
 

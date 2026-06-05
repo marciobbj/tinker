@@ -39,4 +39,15 @@
     <string name="annotations_page_format">Page %1$d</string>
     <string name="progress_format">%1$d%%</string>
     <string name="annotations_button">Annotations</string>
+    <string name="pen_tool">Pen</string>
+    <string name="pen_done">Done</string>
+    <string name="pen_undo">Undo</string>
+    <string name="pen_eraser">Eraser</string>
+    <string name="ink_annotation_label">Ink annotation</string>
+    <string name="ink_save_failed">Failed to save ink annotation</string>
+    <string name="annotations_ink_section">Ink Annotations</string>
+    <string name="pen_size_thin">Thin</string>
+    <string name="pen_size_medium">Medium</string>
+    <string name="pen_size_thick">Thick</string>
 </resources>
+

@@ -11,6 +11,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.graphics.Bitmap
+import android.graphics.PointF
 import androidx.core.content.ContextCompat
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -52,6 +54,11 @@ class ReaderActivity : AppCompatActivity() {
     private lateinit var btnDark: ImageButton
     private lateinit var btnBookmark: ImageButton
     private lateinit var btnAnnotations: ImageButton
+    private lateinit var btnPen: ImageButton
+
+    private var isDrawingMode = false
+    private var inkDrawingView: InkDrawingView? = null
+
 
     private var pdfDocument: PdfDocument? = null
     private var tempFile: File? = null
@@ -84,6 +91,19 @@ class ReaderActivity : AppCompatActivity() {
         btnDark = findViewById(R.id.btnDark)
         btnBookmark = findViewById(R.id.btnBookmark)
         btnAnnotations = findViewById(R.id.btnAnnotations)
+        btnPen = findViewById(R.id.btnPen)
+
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (isDrawingMode) {
+                    exitDrawingMode()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        })
 
         val uri = intent.data ?: run { finish(); return }
 
@@ -315,6 +335,11 @@ class ReaderActivity : AppCompatActivity() {
         btnAnnotations.setOnClickListener {
             if (!documentReady) return@setOnClickListener
             showAnnotationsPanel()
+        }
+
+        btnPen.setOnClickListener {
+            if (!documentReady) return@setOnClickListener
+            enterDrawingMode()
         }
     }
 
@@ -552,7 +577,11 @@ class ReaderActivity : AppCompatActivity() {
     ) {
         val doc = pdfDocument ?: return
         lifecycleScope.launch {
-            val deleted = doc.deleteMarkupAnnotation(entry.page, entry.type, entry.quads)
+            val deleted = if (entry.type == PdfDocument.ANNOT_INK) {
+                doc.deleteInkAnnotation(entry.page, entry.inkPoints)
+            } else {
+                doc.deleteMarkupAnnotation(entry.page, entry.type, entry.quads)
+            }
             val saved = deleted && doc.saveDocument()
             if (deleted && saved) {
                 annotationStore.removeAnnotation(uri, index)
@@ -591,7 +620,11 @@ class ReaderActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val entry = items[position]
             holder.page.text = getString(R.string.annotations_page_format, entry.page + 1)
-            holder.text.text = entry.textSnippet
+            holder.text.text = if (entry.type == PdfDocument.ANNOT_INK) {
+                getString(R.string.ink_annotation_label)
+            } else {
+                entry.textSnippet
+            }
             holder.itemView.setOnClickListener { onClick(entry) }
         }
 
@@ -737,4 +770,305 @@ class ReaderActivity : AppCompatActivity() {
             }.start()
         }
     }
+
+    private fun enterDrawingMode() {
+        if (isDrawingMode) return
+        isDrawingMode = true
+
+        // Hide UI bars
+        topBar.visibility = View.GONE
+        bottomBar.visibility = View.GONE
+        uiVisible = false
+
+        // Disable touch (scrolling/zooming) on reader views
+        verticalView?.touchEnabled = false
+        bookView?.touchEnabled = false
+
+        // Create and add the InkDrawingView overlay
+        val drawView = InkDrawingView(this).apply {
+            penColor = ContextCompat.getColor(this@ReaderActivity, R.color.ink_black)
+            penSize = 3.5f // Medium size
+            isEraserMode = false
+            pageNumber = getCurrentReaderPage()
+            pageTransformProvider = {
+                if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                    bookView?.getPageTransform(pageNumber)?.let { t ->
+                        InkDrawingView.PageTransform(t.offsetX, t.offsetY, t.scale)
+                      }
+                } else {
+                    verticalView?.getPageTransform(pageNumber)?.let { t ->
+                        InkDrawingView.PageTransform(t.offsetX, t.offsetY, t.scale)
+                    }
+                }
+            }
+        }
+        
+        container.addView(drawView)
+        inkDrawingView = drawView
+
+        // Load existing ink annotations from PDF in background
+        lifecycleScope.launch {
+            val doc = pdfDocument ?: return@launch
+            val page = drawView.pageNumber
+            val flatData = doc.getInkAnnotations(page)
+            if (flatData != null && flatData.isNotEmpty()) {
+                val parsed = parseStrokes(flatData)
+                if (isDrawingMode && inkDrawingView == drawView) {
+                    drawView.setInitialStrokes(parsed)
+                    // Clear ink annotations from PDF memory so they are not rendered under our overlay
+                    doc.clearInkAnnotations(page)
+                    if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                        bookView?.refreshAllPages()
+                    } else {
+                        verticalView?.refreshAllPages()
+                    }
+                }
+            }
+        }
+
+        // Configure toolbar
+        setupPenToolbar()
+    }
+
+    private fun exitDrawingMode() {
+        if (!isDrawingMode) return
+        isDrawingMode = false
+
+        // Remove InkDrawingView overlay
+        inkDrawingView?.let {
+            container.removeView(it)
+        }
+        inkDrawingView = null
+
+        // Re-enable touch on reader views
+        verticalView?.touchEnabled = true
+        bookView?.touchEnabled = true
+
+        // Hide pen toolbar
+        findViewById<View>(R.id.penToolbar).visibility = View.GONE
+
+        // Restore UI bars
+        topBar.visibility = View.VISIBLE
+        bottomBar.visibility = View.VISIBLE
+        uiVisible = true
+    }
+
+    private fun setupPenToolbar() {
+        val toolbar = findViewById<View>(R.id.penToolbar)
+        toolbar.visibility = View.VISIBLE
+
+        val colorBlack = toolbar.findViewById<FrameLayout>(R.id.colorBlack)
+        val colorRed = toolbar.findViewById<FrameLayout>(R.id.colorRed)
+        val colorBlue = toolbar.findViewById<FrameLayout>(R.id.colorBlue)
+        val colorGreen = toolbar.findViewById<FrameLayout>(R.id.colorGreen)
+        val colorOrange = toolbar.findViewById<FrameLayout>(R.id.colorOrange)
+        val colorPurple = toolbar.findViewById<FrameLayout>(R.id.colorPurple)
+
+        val sizeThin = toolbar.findViewById<ImageButton>(R.id.sizeThin)
+        val sizeMedium = toolbar.findViewById<ImageButton>(R.id.sizeMedium)
+        val sizeThick = toolbar.findViewById<ImageButton>(R.id.sizeThick)
+
+        val btnUndo = toolbar.findViewById<ImageButton>(R.id.btnUndo)
+        val btnEraser = toolbar.findViewById<ImageButton>(R.id.btnEraser)
+        val btnDone = toolbar.findViewById<ImageButton>(R.id.btnDone)
+
+        val drawDot = { sizeDp: Int ->
+            val density = resources.displayMetrics.density
+            val sizePx = (36 * density).toInt().coerceAtLeast(1)
+            val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = ContextCompat.getColor(this@ReaderActivity, R.color.ink_black)
+                style = android.graphics.Paint.Style.FILL
+            }
+            canvas.drawCircle(sizePx / 2f, sizePx / 2f, (sizeDp / 2f) * density, p)
+            android.graphics.drawable.BitmapDrawable(resources, bitmap)
+        }
+
+        sizeThin.setImageDrawable(drawDot(4))
+        sizeMedium.setImageDrawable(drawDot(8))
+        sizeThick.setImageDrawable(drawDot(12))
+
+        val colors = listOf(colorBlack, colorRed, colorBlue, colorGreen, colorOrange, colorPurple)
+        val colorValues = listOf(
+            ContextCompat.getColor(this, R.color.ink_black),
+            ContextCompat.getColor(this, R.color.ink_red),
+            ContextCompat.getColor(this, R.color.ink_blue),
+            ContextCompat.getColor(this, R.color.ink_green),
+            ContextCompat.getColor(this, R.color.ink_orange),
+            ContextCompat.getColor(this, R.color.ink_purple)
+        )
+
+        fun updateSelectedColor(selectedLayout: FrameLayout) {
+            for (c in colors) {
+                if (c == selectedLayout) {
+                    c.setBackgroundResource(R.drawable.bg_color_dot_selected)
+                } else {
+                    c.background = null
+                }
+            }
+        }
+
+        for (i in colors.indices) {
+            val layout = colors[i]
+            val value = colorValues[i]
+            layout.setOnClickListener {
+                inkDrawingView?.penColor = value
+                inkDrawingView?.isEraserMode = false
+                btnEraser.isSelected = false
+                btnEraser.setBackgroundResource(0)
+                updateSelectedColor(layout)
+            }
+        }
+        
+        updateSelectedColor(colorBlack)
+
+        val sizes = listOf(sizeThin, sizeMedium, sizeThick)
+        val sizeValues = listOf(1.5f, 3.5f, 7.0f) // in PDF points
+
+        fun updateSelectedSize(selectedBtn: ImageButton) {
+            for (s in sizes) {
+                s.setBackgroundResource(if (s == selectedBtn) R.drawable.bg_color_dot_selected else 0)
+            }
+        }
+
+        for (i in sizes.indices) {
+            val btn = sizes[i]
+            val value = sizeValues[i]
+            btn.setOnClickListener {
+                inkDrawingView?.penSize = value
+                inkDrawingView?.isEraserMode = false
+                btnEraser.isSelected = false
+                btnEraser.setBackgroundResource(0)
+                updateSelectedSize(btn)
+            }
+        }
+        updateSelectedSize(sizeMedium)
+
+        btnUndo.setOnClickListener {
+            inkDrawingView?.undo()
+        }
+
+        btnEraser.setOnClickListener {
+            val eraserOn = !(inkDrawingView?.isEraserMode ?: false)
+            inkDrawingView?.isEraserMode = eraserOn
+            btnEraser.isSelected = eraserOn
+            btnEraser.setBackgroundResource(if (eraserOn) R.drawable.bg_color_dot_selected else 0)
+            
+            if (eraserOn) {
+                for (c in colors) c.background = null
+                for (s in sizes) s.background = null
+            } else {
+                updateSelectedColor(colorBlack)
+                updateSelectedSize(sizeMedium)
+                inkDrawingView?.penColor = colorValues[0]
+                inkDrawingView?.penSize = sizeValues[1]
+            }
+        }
+
+        btnDone.setOnClickListener {
+            saveDrawingAndExit()
+        }
+    }
+
+    private fun saveDrawingAndExit() {
+        val strokes = inkDrawingView?.getStrokes() ?: run {
+            exitDrawingMode()
+            return
+        }
+        
+        val page = getCurrentReaderPage()
+
+        lifecycleScope.launch {
+            val doc = pdfDocument ?: return@launch
+            
+            // Clear existing ink annotations on this page first
+            doc.clearInkAnnotations(page)
+
+            if (strokes.isEmpty()) {
+                // If user erased everything, just save and exit
+                doc.saveDocument()
+                if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                    bookView?.refreshAllPages()
+                } else {
+                    verticalView?.refreshAllPages()
+                }
+                exitDrawingMode()
+                return@launch
+            }
+
+            // Group strokes by color and width to write them
+            val groups = strokes.groupBy { Pair(it.color, it.width) }
+            var allOk = true
+            for ((key, strokeGroup) in groups) {
+                val color = key.first
+                val width = key.second
+                val totalPointsCount = strokeGroup.sumOf { it.points.size }
+                if (totalPointsCount == 0) continue
+
+                val pointsArray = FloatArray(totalPointsCount * 2)
+                val strokeLengthsArray = IntArray(strokeGroup.size)
+
+                var pIdx = 0
+                for (sIdx in strokeGroup.indices) {
+                    val stroke = strokeGroup[sIdx]
+                    strokeLengthsArray[sIdx] = stroke.points.size
+                    for (pt in stroke.points) {
+                        pointsArray[pIdx * 2] = pt.x
+                        pointsArray[pIdx * 2 + 1] = pt.y
+                        pIdx++
+                    }
+                }
+
+                val ok = doc.addInkAnnotation(
+                    pageNumber = page,
+                    points = pointsArray,
+                    strokeLengths = strokeLengthsArray,
+                    color = color,
+                    opacity = 1.0f,
+                    strokeWidth = width
+                )
+                if (!ok) {
+                    allOk = false
+                }
+            }
+
+            if (allOk) {
+                doc.saveDocument()
+                if (currentMode == SettingsStore.DISPLAY_MODE_BOOK) {
+                    bookView?.refreshAllPages()
+                } else {
+                    verticalView?.refreshAllPages()
+                }
+            }
+            exitDrawingMode()
+        }
+    }
+
+    private fun parseStrokes(flatData: FloatArray): List<InkDrawingView.Stroke> {
+        val list = mutableListOf<InkDrawingView.Stroke>()
+        var idx = 0
+        while (idx < flatData.size) {
+            val count = flatData[idx].toInt()
+            val r = flatData[idx + 1]
+            val g = flatData[idx + 2]
+            val b = flatData[idx + 3]
+            val width = flatData[idx + 4]
+            idx += 5
+
+            val color = Color.rgb((r * 255).toInt(), (g * 255).toInt(), (b * 255).toInt())
+            val stroke = InkDrawingView.Stroke(color = color, width = width)
+            for (p in 0 until count) {
+                if (idx + 1 < flatData.size) {
+                    val x = flatData[idx]
+                    val y = flatData[idx + 1]
+                    stroke.points.add(android.graphics.PointF(x, y))
+                    idx += 2
+                }
+            }
+            list.add(stroke)
+        }
+        return list
+    }
 }
+
